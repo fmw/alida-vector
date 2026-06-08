@@ -1,0 +1,13 @@
+{:tasks
+ {test {:doc "Run the Clojure test suite with Kaocha"
+        :task (shell "clojure -M:test")}
+
+  lint {:doc "Run clj-kondo over source, test, dev, and build namespaces"
+        :task (shell "clj-kondo --lint src test dev build.clj")}
+
+  build {:doc "Build the application uberjar"
+         :task (shell "clojure -T:build jar")}
+
+  repl {:doc "Start a CIDER/nREPL development REPL"
+        :override-builtin true
+        :task (shell "clojure -M:dev:nrepl")}}}

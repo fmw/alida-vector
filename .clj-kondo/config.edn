@@ -1,0 +1,4 @@
+{:linters
+ {:unresolved-symbol
+  {:exclude [(integrant.core/init-key)
+             (integrant.core/halt-key!)]}}}
