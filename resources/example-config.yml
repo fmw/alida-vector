@@ -1,0 +1,37 @@
+database:
+  jdbc_url: ${ALIDA_DATABASE_URL}
+  user: ${ALIDA_DATABASE_USER}
+  password: ${ALIDA_DATABASE_PASSWORD}
+
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+  api_key: ${OPENAI_API_KEY}
+  prompt_policy_version: "2026-06-08"
+  deterministic_gate_version: "2026-06-08"
+  deterministic_thresholds:
+    max_removed_absolute: 25
+    max_removed_percentage: 0.2
+    max_changed_percentage: 0.5
+    max_item_failure_percentage: 0.05
+    max_empty_or_short_document_percentage: 0.05
+
+notifications:
+  slack_webhook_url: ${ALIDA_SLACK_WEBHOOK_URL}
+
+indexes:
+  - name: support-knowledge-base
+    auto_activate: true
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: ${OPENAI_API_KEY}
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: support
+        type: jira-service-management
+        url: https://example.atlassian.net/servicedesk/customer/portal/1

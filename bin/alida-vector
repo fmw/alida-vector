@@ -1,0 +1,9 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [[ "${1:-}" == "repl" ]]; then
+  shift
+  exec clojure -M:dev:nrepl "$@"
+fi
+
+exec java -jar "$(dirname "$0")/../target/alida-vector.jar" "$@"
