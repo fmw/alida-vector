@@ -1,3 +1,11 @@
+DROP VIEW IF EXISTS alida_live_chunks_3072;
+--;;
+DROP VIEW IF EXISTS alida_live_chunks_1536;
+--;;
+DROP TABLE IF EXISTS alida_chunks_3072;
+--;;
+DROP TABLE IF EXISTS alida_chunks_1536;
+--;;
 DROP TABLE IF EXISTS alida_events;
 --;;
 DROP TABLE IF EXISTS alida_reports;

@@ -157,3 +157,69 @@ CREATE INDEX alida_events_run_idx
 
 CREATE INDEX alida_events_index_created_idx
   ON alida_events(index_name, created_at DESC);
+--;;
+
+CREATE TABLE alida_chunks_1536 (
+  id uuid DEFAULT gen_random_uuid(),
+  run_id uuid NOT NULL REFERENCES alida_runs(id) ON DELETE CASCADE,
+  source_id text NOT NULL,
+  document_id uuid NOT NULL REFERENCES alida_documents(id) ON DELETE CASCADE,
+  chunk_index integer NOT NULL,
+  chunk_count integer NOT NULL,
+  content text NOT NULL,
+  embedding vector(1536) NOT NULL,
+  estimated_tokens integer NOT NULL,
+  heading_path jsonb NOT NULL DEFAULT '[]'::jsonb,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (run_id, id),
+  UNIQUE (run_id, document_id, chunk_index)
+) PARTITION BY LIST (run_id);
+--;;
+
+CREATE TABLE alida_chunks_3072 (
+  id uuid DEFAULT gen_random_uuid(),
+  run_id uuid NOT NULL REFERENCES alida_runs(id) ON DELETE CASCADE,
+  source_id text NOT NULL,
+  document_id uuid NOT NULL REFERENCES alida_documents(id) ON DELETE CASCADE,
+  chunk_index integer NOT NULL,
+  chunk_count integer NOT NULL,
+  content text NOT NULL,
+  embedding vector(3072) NOT NULL,
+  estimated_tokens integer NOT NULL,
+  heading_path jsonb NOT NULL DEFAULT '[]'::jsonb,
+  metadata jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  PRIMARY KEY (run_id, id),
+  UNIQUE (run_id, document_id, chunk_index)
+) PARTITION BY LIST (run_id);
+--;;
+
+CREATE VIEW alida_live_chunks_1536 AS
+SELECT
+  i.name AS index_name,
+  c.run_id,
+  c.document_id,
+  c.source_id,
+  c.content,
+  c.embedding,
+  c.metadata,
+  c.heading_path,
+  c.estimated_tokens
+FROM alida_chunks_1536 c
+JOIN alida_indexes i ON i.live_run_id = c.run_id;
+--;;
+
+CREATE VIEW alida_live_chunks_3072 AS
+SELECT
+  i.name AS index_name,
+  c.run_id,
+  c.document_id,
+  c.source_id,
+  c.content,
+  c.embedding,
+  c.metadata,
+  c.heading_path,
+  c.estimated_tokens
+FROM alida_chunks_3072 c
+JOIN alida_indexes i ON i.live_run_id = c.run_id;
