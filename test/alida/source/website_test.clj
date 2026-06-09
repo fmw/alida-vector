@@ -62,6 +62,18 @@
              :url "https://example.test/sitemap.xml"}]
            @requests))))
 
+(deftest exact-denied-urls-are-excluded-from-website-discovery
+  (let [requests (atom [])
+        sys (fake-http {"https://example.test/sitemap.xml" {:status 200 :body sitemap}}
+                       requests)
+        items (source/discover sys {:id "site"
+                                    :type "website"
+                                    :sitemap_url "https://example.test/sitemap.xml"
+                                    :allowed_url_prefixes ["https://example.test/docs/"]
+                                    :denied_urls ["https://example.test/docs/a"]})]
+    (is (= ["https://example.test/docs/b"]
+           (mapv :canonical_url items)))))
+
 (deftest sitemap-http-failure-is-a-fatal-source-error
   (let [sys (fake-http {"https://example.test/sitemap.xml" {:status 503 :body "unavailable"}}
                        (atom []))]

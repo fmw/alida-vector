@@ -13,9 +13,11 @@
 (defn- url-allowed?
   [source-cfg url]
   (let [allowed-prefixes (:allowed_url_prefixes source-cfg)
+        denied-urls (set (:denied_urls source-cfg))
         denied-prefixes (:denied_url_prefixes source-cfg)]
     (and (or (not (seq allowed-prefixes))
              (some #(str/starts-with? url %) allowed-prefixes))
+         (not (contains? denied-urls url))
          (not-any? #(str/starts-with? url %) denied-prefixes))))
 
 (defn- sitemap-location-elements

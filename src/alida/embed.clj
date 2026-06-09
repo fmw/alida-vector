@@ -5,6 +5,8 @@
 (def default-max-batch-size 96)
 (def default-max-retries 3)
 (def default-retry-initial-ms 250)
+(def default-retry-jitter-ms 0)
+(def default-inter-batch-delay-ms 0)
 (def default-request-timeout-ms 60000)
 
 (defn- dispatch-provider
@@ -46,6 +48,12 @@
     (sleep-fn millis)
     (Thread/sleep millis)))
 
+(defn- random-int
+  [sys bound]
+  (if-let [random-int-fn (:alida/random-int sys)]
+    (random-int-fn bound)
+    (rand-int bound)))
+
 (defn retryable-status?
   [status]
   (or (= 429 status)
@@ -66,7 +74,13 @@
 (defn with-retries
   [sys provider-cfg f]
   (let [max-retries (or (:max_retries provider-cfg) default-max-retries)
-        retry-initial-ms (or (:retry_initial_ms provider-cfg) default-retry-initial-ms)]
+        retry-initial-ms (or (:retry_initial_ms provider-cfg) default-retry-initial-ms)
+        retry-jitter-ms (or (:retry_jitter_ms provider-cfg) default-retry-jitter-ms)
+        retry-delay-ms (fn [delay-ms]
+                         (+ delay-ms
+                            (if (pos? retry-jitter-ms)
+                              (random-int sys (inc retry-jitter-ms))
+                              0)))]
     (letfn [(attempt [attempt-number delay-ms]
               (try
                 (f)
@@ -74,7 +88,7 @@
                   (let [{:keys [retryable]} (ex-data e)]
                     (if (and retryable (< attempt-number max-retries))
                       (do
-                        (sleep! sys delay-ms)
+                        (sleep! sys (retry-delay-ms delay-ms))
                         (attempt (inc attempt-number) (* 2 delay-ms)))
                       (throw e))))))]
       (attempt 1 retry-initial-ms))))
@@ -99,12 +113,21 @@
 
 (defn embed-in-batches
   [sys provider-cfg texts embed-one-batch]
-  (let [texts (vec texts)]
-    (->> (batches provider-cfg texts)
-         (mapcat (fn [batch]
-                   (with-retries
-                     sys
-                     provider-cfg
-                     #(embed-one-batch sys provider-cfg (vec batch)))))
-         vec
-         (validate-embedding-count! texts))))
+  (let [texts (vec texts)
+        batches (vec (batches provider-cfg texts))
+        inter-batch-delay-ms (or (:inter_batch_delay_ms provider-cfg)
+                                 default-inter-batch-delay-ms)
+        embeddings (loop [remaining batches
+                          result []]
+                     (if-let [batch (first remaining)]
+                       (let [batch-result (with-retries
+                                            sys
+                                            provider-cfg
+                                            #(embed-one-batch sys provider-cfg (vec batch)))
+                             more? (seq (rest remaining))]
+                         (when (and more? (pos? inter-batch-delay-ms))
+                           (sleep! sys inter-batch-delay-ms))
+                         (recur (rest remaining)
+                                (into result batch-result)))
+                       result))]
+    (validate-embedding-count! texts embeddings)))

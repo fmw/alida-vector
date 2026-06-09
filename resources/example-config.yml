@@ -34,6 +34,8 @@ indexes:
       model: text-embedding-3-small
       embedding_dimensions: 1536
       api_key: ${OPENAI_API_KEY}
+      inter_batch_delay_ms: 250
+      retry_jitter_ms: 100
     chunking:
       max_input_tokens: 8192
       max_tokens: 6550
@@ -42,6 +44,8 @@ indexes:
       - id: blog
         type: website
         sitemap_url: https://example.test/sitemap.xml
+        denied_urls:
+          - https://example.test/not-for-indexing/
         language:
           mode: auto
           html_selectors:
