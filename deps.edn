@@ -20,6 +20,7 @@
         hato/hato {:mvn/version "1.0.0"}
         com.google.auth/google-auth-library-oauth2-http {:mvn/version "1.40.0"}
         org.jsoup/jsoup {:mvn/version "1.22.2"}
+        com.github.pemistahl/lingua {:mvn/version "1.2.2"}
         etaoin/etaoin {:mvn/version "1.1.43"}
         org.clj-commons/claypoole {:mvn/version "1.2.2"}}
 
