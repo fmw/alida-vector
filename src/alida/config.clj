@@ -78,6 +78,40 @@
                        :supported-dimensions pgvector/supported-dimensions}))))
   config)
 
+(def required-embedding-keys
+  {"openai" [:model :api_key]
+   "azure-openai" [:endpoint :deployment_name :api_key]
+   "vertex-ai" [:project :location :model]})
+
+(defn- validate-required-embedding-keys!
+  [index]
+  (let [embedding (:embedding index)
+        required-keys (required-embedding-keys (:provider embedding))]
+    (doseq [k required-keys
+            :when (nil? (get embedding k))]
+      (throw (ex-info (str "Invalid embedding config for index " (:name index)
+                           ": provider " (:provider embedding)
+                           " requires " (name k))
+                      {:type :alida.config/missing-embedding-provider-config
+                       :index (:name index)
+                       :provider (:provider embedding)
+                       :key k}))))
+  index)
+
+(defn- validate-positive-embedding-options!
+  [index]
+  (let [embedding (:embedding index)]
+    (doseq [k [:max_batch_size :max_retries :retry_initial_ms]
+            :let [v (get embedding k)]
+            :when (and (some? v) (not (pos-int? v)))]
+      (throw (ex-info (str "Invalid embedding config for index " (:name index)
+                           ": " (name k) " must be positive")
+                      {:type :alida.config/invalid-embedding-provider-config
+                       :index (:name index)
+                       :key k
+                       :value v}))))
+  index)
+
 (defn- validate-chunking!
   [index]
   (let [{:keys [max_input_tokens max_tokens safety_multiplier]} (:chunking index)
@@ -94,7 +128,10 @@
 
 (defn- validate-indexes!
   [config]
-  (run! validate-chunking! (:indexes config))
+  (doseq [index (:indexes config)]
+    (validate-required-embedding-keys! index)
+    (validate-positive-embedding-options! index)
+    (validate-chunking! index))
   config)
 
 (defn structural-config

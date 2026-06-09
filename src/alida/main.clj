@@ -1,6 +1,9 @@
 (ns alida.main
   (:gen-class)
-  (:require [alida.cli :as cli]))
+  (:require [alida.cli :as cli]
+            [alida.embed.azure-openai]
+            [alida.embed.openai]
+            [alida.embed.vertex-ai]))
 
 (defn -main
   [& argv]

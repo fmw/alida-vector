@@ -45,6 +45,7 @@ indexes:
       provider: openai
       model: text-embedding-3-small
       embedding_dimensions: 1536
+      api_key: test-key
     chunking:
       max_input_tokens: 8192
       max_tokens: 6550
@@ -74,6 +75,7 @@ indexes:
       provider: openai
       model: text-embedding-3-small
       embedding_dimensions: 1536
+      api_key: test-key
     chunking:
       max_input_tokens: 100
       max_tokens: 100
@@ -107,6 +109,7 @@ indexes:
       provider: openai
       model: text-embedding-3-small
       embedding_dimensions: 768
+      api_key: test-key
     chunking:
       max_input_tokens: 8192
       max_tokens: 6550
@@ -117,6 +120,95 @@ indexes:
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"Unsupported pgvector dimensions"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest embedding-provider-required-fields-are-validated
+  (let [file (java.io.File/createTempFile "alida-embedding-provider" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+indexes:
+  - name: docs
+    embedding:
+      provider: azure-openai
+      deployment_name: text-embedding-ada-002
+      embedding_dimensions: 1536
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"provider azure-openai requires endpoint"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest openai-embedding-api-key-is-required
+  (let [file (java.io.File/createTempFile "alida-openai-embedding-provider" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"provider openai requires api_key"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest embedding-provider-positive-options-are-validated
+  (let [file (java.io.File/createTempFile "alida-embedding-options" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+      max_batch_size: 0
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"max_batch_size must be positive"
                             (config/load-config (.getPath file))))
       (finally
         (.delete file)))))
