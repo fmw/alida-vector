@@ -48,7 +48,15 @@
   [:map {:closed false}
    [:id :string]
    [:type [:enum "website" "jira-service-management" "s3" "gcs" "local"]]
-   [:language {:optional true} SourceLanguage]])
+   [:language {:optional true} SourceLanguage]
+   [:path {:optional true} :string]
+   [:paths {:optional true} [:sequential :string]]
+   [:root {:optional true} :string]
+   [:include_extensions {:optional true} [:sequential :string]]
+   [:sitemap_url {:optional true} :string]
+   [:sitemap_urls {:optional true} [:sequential :string]]
+   [:allowed_url_prefixes {:optional true} [:sequential :string]]
+   [:denied_url_prefixes {:optional true} [:sequential :string]]])
 
 (def Verification
   [:map
