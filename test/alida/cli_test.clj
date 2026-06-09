@@ -1,5 +1,6 @@
 (ns alida.cli-test
   (:require [alida.cli :as cli]
+            [alida.crawl :as crawl]
             [alida.db.postgres :as db]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -107,6 +108,43 @@
         (let [result (cli/run ["migrate" "--config" "ignored.yml"])]
           (is (= 0 (:exit-code result)))
           (is (= "Migrations complete." (:message result))))))))
+
+(deftest crawl-command-runs-candidate-crawl
+  (with-system-stub
+    (fn []
+      (with-redefs [db/datasource (fn [_]
+                                    (reify java.io.Closeable
+                                      (close [_] nil)))
+                    crawl/crawl! (fn [sys _ opts]
+                                   (is (= test-system sys))
+                                   (is (= {:index-name "docs"} opts))
+                                   {:succeeded [{:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                                                 :index_name "docs"
+                                                 :document_count 2
+                                                 :chunk_count 3
+                                                 :error_count 0
+                                                 :verification_verdict "caution"}]
+                                    :failed []})]
+        (let [result (cli/run ["crawl" "--config" "ignored.yml" "--index" "docs"])]
+          (is (= 0 (:exit-code result)))
+          (is (str/includes? (:message result) "1 succeeded, 0 failed"))
+          (is (str/includes? (:message result) "docs"))
+          (is (str/includes? (:message result) "verdict=caution")))))))
+
+(deftest crawl-command-exits-nonzero-when-any-index-fails
+  (with-system-stub
+    (fn []
+      (with-redefs [db/datasource (fn [_]
+                                    (reify java.io.Closeable
+                                      (close [_] nil)))
+                    crawl/crawl! (fn [_ _ _]
+                                   {:succeeded []
+                                    :failed [{:index_name "docs"
+                                              :message "boom"}]})]
+        (let [result (cli/run ["crawl" "--config" "ignored.yml"])]
+          (is (= 1 (:exit-code result)))
+          (is (str/includes? (:message result) "0 succeeded, 1 failed"))
+          (is (str/includes? (:message result) "docs  failed: boom")))))))
 
 (deftest stubbed-commands-validate-arguments-before-returning-not-implemented
   (with-system-stub

@@ -1,6 +1,9 @@
 (ns alida.integration.postgres-test
   (:require [alida.config :as config]
+            [alida.crawl :as crawl]
             [alida.db.postgres :as db]
+            [alida.embed :as embed]
+            [alida.source.local]
             [alida.vector.pgvector :as pgvector]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -57,6 +60,17 @@
   [dimensions]
   (format "('[' || array_to_string(array_fill(0.0::float8, ARRAY[%d]), ',') || ']')::vector"
           dimensions))
+
+(defn- zero-vector
+  [dimensions]
+  (vec (repeat dimensions 0.0)))
+
+(defn- temp-file
+  [suffix body]
+  (let [file (java.io.File/createTempFile "alida-integration" suffix)]
+    (.deleteOnExit file)
+    (spit file body)
+    file))
 
 (deftest ^:integration migrates-supported-pgvector-schema
   (let [result (with-temp-database
@@ -135,6 +149,64 @@
                  :estimated_tokens 2}]
                (:live-chunks result)))
         (is (<= 8 (:events result)))))))
+
+(deftest ^:integration crawl-index-stores-candidate-documents-and-chunks
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (let [file (temp-file ".html"
+                                         "<html lang=\"en\"><head><title>Support</title></head>
+                                          <body><h1>Support</h1><p>This page explains how support works.</p></body></html>")
+                         test-index (assoc index-cfg
+                                           :sources [{:id "fixtures"
+                                                      :type "local"
+                                                      :path (.getPath file)}])
+                         sys {:alida/config {:alida.config/structural-hash "hash-1"
+                                             :indexes [test-index]}}]
+                     (with-redefs [embed/embed-batch (fn [_ _ texts]
+                                                       (mapv (fn [_] (zero-vector 1536)) texts))]
+                       (let [summary (crawl/crawl-index! sys ds test-index)]
+                         {:summary summary
+                          :run (db/get-run ds (:run_id summary))
+                          :sources (jdbc/execute!
+                                    ds
+                                    ["SELECT source_id, source_type, document_count, error_count
+                                      FROM alida_sources
+                                      WHERE run_id = ?"
+                                     (:run_id summary)]
+                                    db/jdbc-opts)
+                          :documents (jdbc/execute!
+                                      ds
+                                      ["SELECT source_id, canonical_url, title, locale, normalized_content_hash
+                                        FROM alida_documents
+                                        WHERE run_id = ?"
+                                       (:run_id summary)]
+                                      db/jdbc-opts)
+                          :chunks (jdbc/execute!
+                                   ds
+                                   ["SELECT source_id, content, estimated_tokens
+                                     FROM alida_chunks_1536
+                                     WHERE run_id = ?"
+                                    (:run_id summary)]
+                                   db/jdbc-opts)})))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (testing "candidate crawl persists run content"
+        (is (= "complete" (get-in result [:run :lifecycle_status])))
+        (is (= "caution" (get-in result [:run :verification_verdict])))
+        (is (= 1 (get-in result [:summary :document_count])))
+        (is (= 1 (get-in result [:summary :chunk_count])))
+        (is (= [{:source_id "fixtures"
+                 :source_type "local"
+                 :document_count 1
+                 :error_count 0}]
+               (:sources result)))
+        (is (str/ends-with? (-> result :documents first :title) ".html"))
+        (is (= "en" (-> result :documents first :locale)))
+        (is (= 64 (count (-> result :documents first :normalized_content_hash))))
+        (is (= "fixtures" (-> result :chunks first :source_id)))
+        (is (str/includes? (-> result :chunks first :content) "Support"))
+        (is (pos-int? (-> result :chunks first :estimated_tokens)))))))
 
 (deftest ^:integration lifecycle-guards-invalid-transitions
   (let [result (with-temp-database

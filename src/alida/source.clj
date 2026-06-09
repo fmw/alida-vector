@@ -30,7 +30,8 @@
 
 (defn anomaly?
   [value]
-  (contains? value :alida/error))
+  (and (map? value)
+       (contains? value :alida/error)))
 
 (defn request!
   [sys request]

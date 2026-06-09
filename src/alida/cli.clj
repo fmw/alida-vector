@@ -1,5 +1,6 @@
 (ns alida.cli
-  (:require [alida.db.postgres :as db]
+  (:require [alida.crawl :as crawl]
+            [alida.db.postgres :as db]
             [alida.system :as system]
             [clojure.string :as str]
             [clojure.tools.cli :as tools.cli]
@@ -103,6 +104,31 @@
     (str/join \newline (map format-run runs))
     "No runs found."))
 
+(defn- format-crawled-run
+  [{:keys [run_id index_name document_count chunk_count error_count verification_verdict]}]
+  (format "%s  %s  documents=%s  chunks=%s  errors=%s  verdict=%s"
+          run_id
+          index_name
+          document_count
+          chunk_count
+          error_count
+          verification_verdict))
+
+(defn- format-failed-index
+  [{:keys [index_name message]}]
+  (format "%s  failed: %s" index_name message))
+
+(defn- format-crawl-result
+  [{:keys [succeeded failed]}]
+  (str/join
+   \newline
+   (concat
+    [(format "Crawl finished: %s succeeded, %s failed."
+             (count succeeded)
+             (count failed))]
+    (map format-crawled-run succeeded)
+    (map format-failed-index failed))))
+
 (defmulti execute
   (fn [command _sys _options _arguments] command))
 
@@ -115,6 +141,14 @@
   (db/migrate! (:alida/config sys))
   {:exit-code 0
    :message "Migrations complete."})
+
+(defmethod execute "crawl"
+  [_ sys options _arguments]
+  (let [result (with-datasource
+                 sys
+                 #(crawl/crawl! sys % {:index-name (:index options)}))]
+    {:exit-code (if (seq (:failed result)) 1 0)
+     :message (format-crawl-result result)}))
 
 (defmethod execute "runs"
   [_ sys options _arguments]
