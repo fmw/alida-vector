@@ -382,3 +382,41 @@ indexes:
                             (config/load-config (.getPath file))))
       (finally
         (.delete file)))))
+
+(deftest local-and-website-source-config-loads
+  (let [file (java.io.File/createTempFile "alida-source-config" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: fixtures
+        type: local
+        root: test/fixtures
+        include_extensions: [html, md]
+      - id: website
+        type: website
+        sitemap_url: https://example.test/sitemap.xml
+        allowed_url_prefixes: [https://example.test/docs/]
+        denied_url_prefixes: [https://example.test/private/]
+")
+      (let [sources (-> (config/load-config (.getPath file)) :indexes first :sources)]
+        (is (= ["local" "website"] (mapv :type sources)))
+        (is (= ["html" "md"] (-> sources first :include_extensions)))
+        (is (= ["https://example.test/docs/"] (-> sources second :allowed_url_prefixes))))
+      (finally
+        (.delete file)))))
