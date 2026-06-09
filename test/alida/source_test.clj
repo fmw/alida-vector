@@ -16,4 +16,7 @@
   (is (= {:alida/error {:cognitect.anomalies/category :cognitect.anomalies/not-found
                        :type :example}}
          (source/anomaly :cognitect.anomalies/not-found {:type :example})))
-  (is (source/anomaly? (source/anomaly :cognitect.anomalies/fault {}))))
+  (is (source/anomaly? (source/anomaly :cognitect.anomalies/fault {})))
+  (is (false? (source/anomaly? nil)))
+  (is (false? (source/anomaly? "not a map")))
+  (is (false? (source/anomaly? (ex-info "boom" {})))))
