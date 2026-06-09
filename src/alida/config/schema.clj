@@ -19,8 +19,16 @@
    [:provider [:enum "openai" "azure-openai" "vertex-ai"]]
    [:model {:optional true} :string]
    [:deployment_name {:optional true} :string]
+   [:endpoint {:optional true} :string]
+   [:api_version {:optional true} :string]
+   [:project {:optional true} :string]
+   [:location {:optional true} :string]
+   [:credentials_path {:optional true} :string]
+   [:access_token {:optional true} :string]
    [:embedding_dimensions :int]
    [:max_batch_size {:optional true} :int]
+   [:max_retries {:optional true} :int]
+   [:retry_initial_ms {:optional true} :int]
    [:api_key {:optional true} :string]])
 
 (def Source
