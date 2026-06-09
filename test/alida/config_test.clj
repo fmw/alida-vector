@@ -213,6 +213,37 @@ indexes:
       (finally
         (.delete file)))))
 
+(deftest embedding-provider-rate-limit-options-must-be-non-negative
+  (let [file (java.io.File/createTempFile "alida-embedding-rate-limit-options" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+      inter_batch_delay_ms: -1
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"inter_batch_delay_ms must be zero or positive"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
 (deftest language-config-loads-for-index-and-source
   (let [file (java.io.File/createTempFile "alida-language-config" ".yml")]
     (try
@@ -399,6 +430,8 @@ indexes:
       model: text-embedding-3-small
       embedding_dimensions: 1536
       api_key: test-key
+      retry_jitter_ms: 100
+      inter_batch_delay_ms: 250
     chunking:
       max_input_tokens: 8192
       max_tokens: 6550
@@ -412,11 +445,16 @@ indexes:
         type: website
         sitemap_url: https://example.test/sitemap.xml
         allowed_url_prefixes: [https://example.test/docs/]
+        denied_urls: [https://example.test/docs/secret]
         denied_url_prefixes: [https://example.test/private/]
 ")
-      (let [sources (-> (config/load-config (.getPath file)) :indexes first :sources)]
+      (let [index (-> (config/load-config (.getPath file)) :indexes first)
+            sources (:sources index)]
+        (is (= 100 (-> index :embedding :retry_jitter_ms)))
+        (is (= 250 (-> index :embedding :inter_batch_delay_ms)))
         (is (= ["local" "website"] (mapv :type sources)))
         (is (= ["html" "md"] (-> sources first :include_extensions)))
-        (is (= ["https://example.test/docs/"] (-> sources second :allowed_url_prefixes))))
+        (is (= ["https://example.test/docs/"] (-> sources second :allowed_url_prefixes)))
+        (is (= ["https://example.test/docs/secret"] (-> sources second :denied_urls))))
       (finally
         (.delete file)))))

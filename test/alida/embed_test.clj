@@ -13,14 +13,17 @@
    :body (json/write-str body)})
 
 (defn- fake-sys
-  [responses requests sleeps]
-  {:alida/http-request (fn [request]
-                         (swap! requests conj request)
-                         (let [response (first @responses)]
-                           (swap! responses subvec 1)
-                           response))
-   :alida/sleep (fn [millis]
-                  (swap! sleeps conj millis))})
+  ([responses requests sleeps]
+   (fake-sys responses requests sleeps (constantly 0)))
+  ([responses requests sleeps random-int-fn]
+   {:alida/http-request (fn [request]
+                          (swap! requests conj request)
+                          (let [response (first @responses)]
+                            (swap! responses subvec 1)
+                            response))
+    :alida/sleep (fn [millis]
+                   (swap! sleeps conj millis))
+    :alida/random-int random-int-fn}))
 
 (deftest openai-embeds-in-batches-and-retries-retryable-errors
   (let [responses (atom [{:status 429 :body "{\"error\":\"rate limited\"}"}
@@ -49,6 +52,43 @@
             :input ["a" "b"]
             :encoding_format "float"}
            (json/read-str (:body (first @requests)) :key-fn keyword)))))
+
+(deftest embedding-retries-can-add-jitter-to-backoff
+  (let [responses (atom [{:status 429 :body "{\"error\":\"rate limited\"}"}
+                         (json-response {:data [{:index 0 :embedding [0.1]}]})])
+        requests (atom [])
+        sleeps (atom [])
+        result (embed/embed-batch
+                (fake-sys responses requests sleeps (fn [bound]
+                                                      (is (= 11 bound))
+                                                      7))
+                {:provider "openai"
+                 :api_key "openai-key"
+                 :model "text-embedding-3-small"
+                 :max_retries 2
+                 :retry_initial_ms 5
+                 :retry_jitter_ms 10}
+                ["a"])]
+    (is (= [[0.1]] result))
+    (is (= [12] @sleeps))))
+
+(deftest embedding-batches-can-pause-between-provider-calls
+  (let [responses (atom [(json-response {:data [{:index 0 :embedding [0.1]}]})
+                         (json-response {:data [{:index 0 :embedding [0.2]}]})
+                         (json-response {:data [{:index 0 :embedding [0.3]}]})])
+        requests (atom [])
+        sleeps (atom [])
+        result (embed/embed-batch
+                (fake-sys responses requests sleeps)
+                {:provider "openai"
+                 :api_key "openai-key"
+                 :model "text-embedding-3-small"
+                 :max_batch_size 1
+                 :inter_batch_delay_ms 25}
+                ["a" "b" "c"])]
+    (is (= [[0.1] [0.2] [0.3]] result))
+    (is (= 3 (count @requests)))
+    (is (= [25 25] @sleeps))))
 
 (deftest azure-openai-uses-deployment-endpoint
   (let [responses (atom [(json-response {:data [{:index 0 :embedding [1.0 2.0]}]})])

@@ -96,8 +96,8 @@
                       {:type :alida.config/missing-embedding-provider-config
                        :index (:name index)
                        :provider (:provider embedding)
-                       :key k}))))
-  index)
+                       :key k})))
+    index))
 
 (defn- validate-positive-embedding-options!
   [index]
@@ -110,8 +110,17 @@
                       {:type :alida.config/invalid-embedding-provider-config
                        :index (:name index)
                        :key k
-                       :value v}))))
-  index)
+                       :value v})))
+    (doseq [k [:retry_jitter_ms :inter_batch_delay_ms]
+            :let [v (get embedding k)]
+            :when (and (some? v) (not (nat-int? v)))]
+      (throw (ex-info (str "Invalid embedding config for index " (:name index)
+                           ": " (name k) " must be zero or positive")
+                      {:type :alida.config/invalid-embedding-provider-config
+                       :index (:name index)
+                       :key k
+                       :value v})))
+    index))
 
 (defn- validate-chunking!
   [index]

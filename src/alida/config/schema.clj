@@ -42,6 +42,8 @@
    [:max_batch_size {:optional true} :int]
    [:max_retries {:optional true} :int]
    [:retry_initial_ms {:optional true} :int]
+   [:retry_jitter_ms {:optional true} :int]
+   [:inter_batch_delay_ms {:optional true} :int]
    [:api_key {:optional true} :string]])
 
 (def Source
@@ -56,6 +58,7 @@
    [:sitemap_url {:optional true} :string]
    [:sitemap_urls {:optional true} [:sequential :string]]
    [:allowed_url_prefixes {:optional true} [:sequential :string]]
+   [:denied_urls {:optional true} [:sequential :string]]
    [:denied_url_prefixes {:optional true} [:sequential :string]]])
 
 (def Verification
