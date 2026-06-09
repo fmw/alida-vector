@@ -26,6 +26,9 @@ notifications:
 indexes:
   - name: support-knowledge-base
     auto_activate: true
+    languages:
+      allowed: [en, de, nl, fr]
+      fallback: en
     embedding:
       provider: openai
       model: text-embedding-3-small
@@ -36,6 +39,16 @@ indexes:
       max_tokens: 6550
       safety_multiplier: 1.2
     sources:
+      - id: blog
+        type: website
+        sitemap_url: https://example.test/sitemap.xml
+        language:
+          mode: auto
+          html_selectors:
+            - html[lang]
+            - meta[property=og:locale]
       - id: support
         type: jira-service-management
         url: https://example.atlassian.net/servicedesk/customer/portal/1
+        language:
+          mode: detect
