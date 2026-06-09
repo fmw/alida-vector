@@ -1,6 +1,7 @@
 (ns alida.config
   (:require [alida.config.schema :as schema]
             [alida.env :as env]
+            [alida.vector.pgvector :as pgvector]
             [clj-yaml.core :as yaml]
             [clojure.java.io :as io]
             [clojure.string :as str]
@@ -36,6 +37,47 @@
                      :errors (env/redact (me/humanize (m/explain schema/Config config)))})))
   config)
 
+(defn- normalize-storage
+  [config]
+  (if (:database config)
+    config
+    (if-let [metadata (get-in config [:storage :metadata])]
+      (assoc config :database (dissoc metadata :type))
+      config)))
+
+(defn- validate-storage!
+  [config]
+  (when-not (or (:database config) (get-in config [:storage :metadata]))
+    (throw (ex-info "Invalid Alida config: configure storage.metadata or database"
+                    {:type :alida.config/missing-storage})))
+  (when-let [vectors (get-in config [:storage :vectors])]
+    (when-not (= "pgvector" (:type vectors))
+      (throw (ex-info (str "Unsupported vector storage type: " (:type vectors))
+                      {:type :alida.config/unsupported-vector-storage
+                       :vector-storage-type (:type vectors)}))))
+  config)
+
+(defn- vector-storage-type
+  [config]
+  (or (get-in config [:storage :vectors :type])
+      "pgvector"))
+
+(defn- validate-vector-dimensions!
+  [config]
+  (when (= "pgvector" (vector-storage-type config))
+    (doseq [index (:indexes config)
+            :let [dimensions (get-in index [:embedding :embedding_dimensions])]
+            :when (not (pgvector/supported-dimension? dimensions))]
+      (throw (ex-info (str "Unsupported pgvector dimensions for index " (:name index)
+                           ": " dimensions
+                           ". Supported dimensions: "
+                           (str/join ", " (sort pgvector/supported-dimensions)))
+                      {:type :alida.config/unsupported-pgvector-dimensions
+                       :index (:name index)
+                       :embedding-dimensions dimensions
+                       :supported-dimensions pgvector/supported-dimensions}))))
+  config)
+
 (defn- validate-chunking!
   [index]
   (let [{:keys [max_input_tokens max_tokens safety_multiplier]} (:chunking index)
@@ -69,7 +111,10 @@
   (let [raw (parse-yaml-file path)
         config (-> raw
                    env/interpolate
+                   normalize-storage
                    validate-schema!
+                   validate-storage!
+                   validate-vector-dimensions!
                    validate-indexes!)]
     (assoc config
            :alida.config/path (str path)

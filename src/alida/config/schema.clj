@@ -49,6 +49,23 @@
    [:username {:optional true} :string]
    [:password {:optional true} :string]])
 
+(def MetadataStorage
+  [:map
+   [:type [:enum "postgres"]]
+   [:jdbc_url :string]
+   [:user {:optional true} :string]
+   [:username {:optional true} :string]
+   [:password {:optional true} :string]])
+
+(def VectorStorage
+  [:map
+   [:type [:enum "pgvector"]]])
+
+(def Storage
+  [:map
+   [:metadata MetadataStorage]
+   [:vectors VectorStorage]])
+
 (def Index
   [:map
    [:name :string]
@@ -58,8 +75,9 @@
    [:sources [:sequential Source]]])
 
 (def Config
-  [:map
-   [:database Database]
+  [:map {:closed false}
+   [:database {:optional true} Database]
+   [:storage {:optional true} Storage]
    [:verification Verification]
    [:notifications {:optional true} Notifications]
    [:indexes [:sequential Index]]])
