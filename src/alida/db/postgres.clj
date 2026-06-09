@@ -1,5 +1,7 @@
 (ns alida.db.postgres
-  (:require [clojure.data.json :as json]
+  (:require [alida.vector.pgvector :as pgvector]
+            [clojure.data.json :as json]
+            [clojure.string :as str]
             [migratus.core :as migratus]
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs])
@@ -155,6 +157,79 @@
                          :event_type "run-created"
                          :details {:lifecycle_status (:lifecycle_status run)}})
       run)))
+
+(defn upsert-source!
+  [connectable run source-cfg structural-config-hash {:keys [document_count error_count metadata]}]
+  (jdbc/execute-one!
+   connectable
+   ["INSERT INTO alida_sources
+       (run_id, source_id, source_type, structural_config_hash, document_count, error_count, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (run_id, source_id) DO UPDATE
+     SET document_count = EXCLUDED.document_count,
+         error_count = EXCLUDED.error_count,
+         metadata = EXCLUDED.metadata
+     RETURNING *"
+    (:id run)
+    (:id source-cfg)
+    (:type source-cfg)
+    structural-config-hash
+    (or document_count 0)
+    (or error_count 0)
+    (jsonb (or metadata {}))]
+   jdbc-opts))
+
+(defn insert-document!
+  [connectable run source-cfg document]
+  (jdbc/execute-one!
+   connectable
+   ["INSERT INTO alida_documents
+       (run_id, source_id, external_id, canonical_url, title, locale,
+        normalized_content_hash, raw_content_hash, metadata)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+     RETURNING *"
+    (:id run)
+    (:id source-cfg)
+    (:external_id document)
+    (:canonical_url document)
+    (:title document)
+    (:locale document)
+    (:normalized_content_hash document)
+    (:raw_content_hash document)
+    (jsonb {:content_type (:content_type document)
+            :html_locale (:html_locale document)
+            :language_source (:language_source document)
+            :language_confidence (:language_confidence document)})]
+   jdbc-opts))
+
+(defn- vector-literal
+  [embedding]
+  (str "[" (str/join "," embedding) "]"))
+
+(defn insert-chunks!
+  [connectable embedding-dimensions run source-cfg document-row chunks]
+  (let [table-name (pgvector/dimension-table-name embedding-dimensions)]
+    (doseq [{:keys [chunk_index chunk_count content embedding estimated_tokens heading_path metadata]} chunks]
+      (jdbc/execute-one!
+       connectable
+       [(format
+         "INSERT INTO %s
+            (run_id, source_id, document_id, chunk_index, chunk_count, content,
+             embedding, estimated_tokens, heading_path, metadata)
+          VALUES (?, ?, ?, ?, ?, ?, ?::vector, ?, ?, ?)
+          RETURNING id"
+         table-name)
+        (:id run)
+        (:id source-cfg)
+        (:id document-row)
+        chunk_index
+        chunk_count
+        content
+        (vector-literal embedding)
+        estimated_tokens
+        (jsonb (or heading_path []))
+        (jsonb (or metadata {}))]
+       jdbc-opts))))
 
 (defn get-run
   [connectable value]
