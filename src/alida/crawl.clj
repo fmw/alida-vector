@@ -70,14 +70,33 @@
         {:error (error-details e {:source_id (:id source-cfg)
                                   :canonical_url (:canonical_url discovered-item)})}))))
 
+(defn- dedupe-discovered
+  [discovered]
+  (:items
+   (reduce
+    (fn [{:keys [seen] :as result} item]
+      (if (source/anomaly? item)
+        (update result :items conj item)
+        (let [url (:canonical_url item)]
+          (if (and url (contains? seen url))
+            result
+            (-> result
+                (update :seen conj url)
+                (update :items conj item))))))
+    {:seen #{}
+     :items []}
+    discovered)))
+
 (defn process-source
   [sys index-cfg source-cfg]
   (let [discovered (source/discover sys source-cfg)
-        results (mapv #(process-discovered sys index-cfg source-cfg %) discovered)
+        unique-discovered (dedupe-discovered discovered)
+        results (mapv #(process-discovered sys index-cfg source-cfg %) unique-discovered)
         documents (filterv :document results)
         errors (mapv :error (filter :error results))]
     {:source_cfg source-cfg
      :discovered_count (count discovered)
+     :unique_discovered_count (count unique-discovered)
      :document_count (count documents)
      :chunk_count (reduce + 0 (map (comp count :chunks) documents))
      :error_count (count errors)

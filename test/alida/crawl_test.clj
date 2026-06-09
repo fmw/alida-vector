@@ -1,5 +1,6 @@
 (ns alida.crawl-test
   (:require [alida.crawl :as crawl]
+            [alida.source :as source]
             [alida.source.local]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]))
@@ -61,6 +62,24 @@
     (is (= #{:alida.crawl/unsupported-content-type
              :alida.source.local/file-not-found}
            (set (map :type (:errors result)))))))
+
+(deftest process-source-deduplicates-discovered-canonical-urls
+  (let [file (temp-file ".html" "<h1>Hello</h1><p>This document can be processed.</p>")
+        item {:source_id "fixtures"
+              :source_type "local"
+              :canonical_url (.toString (.toURI file))
+              :path (.getPath file)
+              :content_type "text/html"}
+        result (with-redefs [source/discover (fn [_ _] [item item])]
+                 (crawl/process-source
+                  {}
+                  index-cfg
+                  {:id "fixtures"
+                   :type "local"}))]
+    (is (= 2 (:discovered_count result)))
+    (is (= 1 (:unique_discovered_count result)))
+    (is (= 1 (:document_count result)))
+    (is (= 0 (:error_count result)))))
 
 (deftest crawl-continues-with-other-indexes-after-one-index-fails
   (let [sys {:alida/config {:indexes [{:name "broken"} {:name "ok"}]}}]
