@@ -1,5 +1,5 @@
 (ns alida.cli
-  (:require [alida.db :as db]
+  (:require [alida.db.postgres :as db]
             [alida.system :as system]
             [clojure.string :as str]
             [clojure.tools.cli :as tools.cli]
@@ -21,6 +21,8 @@
 (def option-specs
   [["-c" "--config PATH" "YAML config file"]
    ["-i" "--index NAME" "Limit command to one index"]
+   ["-n" "--limit N" "Maximum rows to return for list commands"
+    :parse-fn parse-long]
    [nil "--json" "Print machine-readable JSON when supported"]
    [nil "--keep-last N" "For prune: keep the last N runs per index"
     :parse-fn parse-long]
@@ -81,6 +83,26 @@
   {:exit-code 2
    :message (str "Command '" command "' is wired but not implemented yet.")})
 
+(defn- with-datasource
+  [sys f]
+  (with-open [ds (db/datasource (:database (:alida/config sys)))]
+    (f ds)))
+
+(defn- format-run
+  [run]
+  (format "%s  %-28s  %-10s  %-7s  %s"
+          (:id run)
+          (:index_name run)
+          (:lifecycle_status run)
+          (or (:verification_verdict run) "-")
+          (:started_at run)))
+
+(defn- format-runs
+  [runs]
+  (if (seq runs)
+    (str/join \newline (map format-run runs))
+    "No runs found."))
+
 (defmulti execute
   (fn [command _sys _options _arguments] command))
 
@@ -94,25 +116,40 @@
   {:exit-code 0
    :message "Migrations complete."})
 
+(defmethod execute "runs"
+  [_ sys options _arguments]
+  (let [runs (with-datasource
+               sys
+               #(db/list-runs % {:index_name (:index options)
+                                 :limit (:limit options)}))]
+    {:exit-code 0
+     :message (format-runs runs)}))
+
 (defmethod execute "report"
   [command sys options arguments]
   (require-arg arguments "run-id")
   (not-implemented command sys options arguments))
 
 (defmethod execute "activate"
-  [command sys options arguments]
-  (require-arg arguments "run-id")
-  (not-implemented command sys options arguments))
+  [_ sys _options arguments]
+  (let [run-id (require-arg arguments "run-id")
+        run (with-datasource sys #(db/activate-run! % run-id))]
+    {:exit-code 0
+     :message (str "Activated run " (:id run) ".")}))
 
 (defmethod execute "reject"
-  [command sys options arguments]
-  (require-arg arguments "run-id")
-  (not-implemented command sys options arguments))
+  [_ sys _options arguments]
+  (let [run-id (require-arg arguments "run-id")
+        run (with-datasource sys #(db/reject-run! % run-id))]
+    {:exit-code 0
+     :message (str "Rejected run " (:id run) ".")}))
 
 (defmethod execute "rollback"
-  [command sys options arguments]
-  (require-arg arguments "index-name")
-  (not-implemented command sys options arguments))
+  [_ sys _options arguments]
+  (let [index-name (require-arg arguments "index-name")]
+    (with-datasource sys #(db/rollback-index! % index-name))
+    {:exit-code 0
+     :message (str "Rolled back index " index-name ".")}))
 
 (defmethod execute "search"
   [command sys options arguments]

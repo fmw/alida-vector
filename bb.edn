@@ -1,12 +1,26 @@
 {:tasks
  {test {:doc "Run the Clojure test suite with Kaocha"
-        :task (shell "clojure -M:test")}
+        :task (shell "clojure -M:test unit")}
+
+  integration {:doc "Run integration tests against local PostgreSQL on port 55432"
+               :task (shell {:extra-env {"ALIDA_TEST_DATABASE_URL" "jdbc:postgresql://127.0.0.1:55432/alida"
+                                         "ALIDA_TEST_DATABASE_USER" "fmw"
+                                         "ALIDA_TEST_DATABASE_PASSWORD" ""
+                                         "ALIDA_DATABASE_URL" "jdbc:postgresql://127.0.0.1:55432/alida"
+                                         "ALIDA_DATABASE_USER" "fmw"
+                                         "ALIDA_DATABASE_PASSWORD" ""
+                                         "OPENAI_API_KEY" "test"
+                                         "ALIDA_SLACK_WEBHOOK_URL" "https://example.test/slack"}}
+                            "clojure -M:test integration")}
 
   lint {:doc "Run clj-kondo over source, test, dev, and build namespaces"
         :task (shell "clj-kondo --lint src test dev build.clj")}
 
   build {:doc "Build the application uberjar"
          :task (shell "clojure -T:build jar")}
+
+  coverage {:doc "Run unit test coverage with Cloverage"
+            :task (shell "clojure -M:coverage")}
 
   repl {:doc "Start a CIDER/nREPL development REPL"
         :override-builtin true
