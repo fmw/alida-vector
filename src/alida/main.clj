@@ -3,7 +3,9 @@
   (:require [alida.cli :as cli]
             [alida.embed.azure-openai]
             [alida.embed.openai]
-            [alida.embed.vertex-ai]))
+            [alida.embed.vertex-ai]
+            [alida.source.local]
+            [alida.source.website]))
 
 (defn -main
   [& argv]
