@@ -212,3 +212,173 @@ indexes:
                             (config/load-config (.getPath file))))
       (finally
         (.delete file)))))
+
+(deftest language-config-loads-for-index-and-source
+  (let [file (java.io.File/createTempFile "alida-language-config" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+indexes:
+  - name: docs
+    languages:
+      allowed: [en, de, nl, fr]
+      fallback: en
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+        language:
+          mode: auto
+          allowed: [en, nl]
+          html_selectors: [\"html[lang]\"]
+")
+      (let [loaded (config/load-config (.getPath file))]
+        (is (= ["en" "de" "nl" "fr"]
+               (-> loaded :indexes first :languages :allowed)))
+        (is (= "auto"
+               (-> loaded :indexes first :sources first :language :mode))))
+      (finally
+        (.delete file)))))
+
+(deftest unsupported-language-locales-are-rejected
+  (let [file (java.io.File/createTempFile "alida-language-unsupported" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+indexes:
+  - name: docs
+    languages:
+      allowed: [xx]
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"unsupported locale xx"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest language-fallback-must-be-allowed
+  (let [file (java.io.File/createTempFile "alida-language-fallback" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+indexes:
+  - name: docs
+    languages:
+      allowed: [en, de]
+      fallback: nl
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"fallback nl is not in allowed locales"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest configured-source-language-requires-locale
+  (let [file (java.io.File/createTempFile "alida-language-configured" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+        language:
+          mode: configured
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"configured language mode without locale"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest source-languages-must-stay-within-index-languages
+  (let [file (java.io.File/createTempFile "alida-language-subset" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+indexes:
+  - name: docs
+    languages:
+      allowed: [en, de]
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+        language:
+          allowed: [fr]
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"allows locales outside the index allowed locales"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
