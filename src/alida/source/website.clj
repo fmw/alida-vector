@@ -18,29 +18,56 @@
              (some #(str/starts-with? url %) allowed-prefixes))
          (not-any? #(str/starts-with? url %) denied-prefixes))))
 
-(defn- parse-sitemap-locations
+(defn- sitemap-location-elements
+  [document kind]
+  (case kind
+    :sitemapindex (.select document "sitemap > loc")
+    :urlset (.select document "url > loc")))
+
+(defn- parse-sitemap
   [body]
-  (let [document (Jsoup/parse body "" (Parser/xmlParser))]
-    (->> (.select document "loc")
-         (map #(.text %))
-         (map str/trim)
-         (remove str/blank?)
-         vec)))
+  (let [document (Jsoup/parse body "" (Parser/xmlParser))
+        kind (cond
+               (.selectFirst document "sitemapindex") :sitemapindex
+               (.selectFirst document "urlset") :urlset
+               :else (throw (ex-info "Sitemap XML must contain urlset or sitemapindex"
+                                     {:type :alida.source.website/invalid-sitemap})))]
+    {:kind kind
+     :locations (->> (sitemap-location-elements document kind)
+                     (map #(.text %))
+                     (map str/trim)
+                     (remove str/blank?)
+                     vec)}))
+
+(defn- discovered-page
+  [source-cfg sitemap-url url]
+  {:source_id (:id source-cfg)
+   :source_type (:type source-cfg)
+   :canonical_url url
+   :content_type "text/html"
+   :sitemap_url sitemap-url})
 
 (defn- discover-sitemap
-  [sys source-cfg sitemap-url]
-  (let [response (source/require-success!
-                  (source/request! sys {:method :get :url sitemap-url})
-                  {:source-id (:id source-cfg)
-                   :sitemap-url sitemap-url})]
-    (->> (parse-sitemap-locations (:body response))
-         (filter #(url-allowed? source-cfg %))
-         (mapv (fn [url]
-                 {:source_id (:id source-cfg)
-                  :source_type (:type source-cfg)
-                  :canonical_url url
-                  :content_type "text/html"
-                  :sitemap_url sitemap-url})))))
+  ([sys source-cfg sitemap-url]
+   (discover-sitemap sys source-cfg #{} sitemap-url))
+  ([sys source-cfg visited sitemap-url]
+   (if (contains? visited sitemap-url)
+     []
+     (let [response (source/require-success!
+                     (source/request! sys {:method :get :url sitemap-url})
+                     {:source-id (:id source-cfg)
+                      :sitemap-url sitemap-url})
+           {:keys [kind locations]} (parse-sitemap (:body response))]
+       (case kind
+         :sitemapindex
+         (mapv identity
+               (mapcat #(discover-sitemap sys source-cfg (conj visited sitemap-url) %)
+                       locations))
+
+         :urlset
+         (->> locations
+              (filter #(url-allowed? source-cfg %))
+              (mapv #(discovered-page source-cfg sitemap-url %))))))))
 
 (defmethod source/discover :website
   [sys source-cfg]
