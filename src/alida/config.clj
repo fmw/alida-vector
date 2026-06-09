@@ -1,6 +1,7 @@
 (ns alida.config
   (:require [alida.config.schema :as schema]
             [alida.env :as env]
+            [alida.lang :as lang]
             [alida.vector.pgvector :as pgvector]
             [clj-yaml.core :as yaml]
             [clojure.java.io :as io]
@@ -126,11 +127,99 @@
                        :safety_multiplier safety_multiplier}))))
   index)
 
+(defn- validate-locales!
+  [index path locales]
+  (doseq [locale locales]
+    (try
+      (lang/require-supported-locale! locale)
+      (catch clojure.lang.ExceptionInfo e
+        (throw (ex-info (str "Invalid language config for index " (:name index)
+                             ": unsupported locale " locale)
+                        (assoc (ex-data e)
+                               :type :alida.config/unsupported-language-locale
+                               :index (:name index)
+                               :path path)))))))
+
+(defn- validate-fallback!
+  [index path allowed fallback]
+  (when fallback
+    (let [normalized-fallback (lang/require-supported-locale! fallback)
+          normalized-allowed (set (map lang/normalize-locale allowed))]
+      (when (and (seq normalized-allowed)
+                 (not (contains? normalized-allowed normalized-fallback)))
+        (throw (ex-info (str "Invalid language config for index " (:name index)
+                             ": fallback " fallback " is not in allowed locales")
+                        {:type :alida.config/language-fallback-not-allowed
+                         :index (:name index)
+                         :path path
+                         :fallback normalized-fallback
+                         :allowed normalized-allowed}))))))
+
+(defn- validate-source-allowed-subset!
+  [index source index-allowed source-allowed]
+  (let [normalized-index-allowed (set (map lang/normalize-locale index-allowed))
+        normalized-source-allowed (set (map lang/normalize-locale source-allowed))]
+    (when (and (seq normalized-index-allowed)
+               (seq normalized-source-allowed)
+               (not (every? normalized-index-allowed normalized-source-allowed)))
+      (throw (ex-info (str "Invalid language config for index " (:name index)
+                           ": source " (:id source)
+                           " allows locales outside the index allowed locales")
+                      {:type :alida.config/source-language-not-in-index-languages
+                       :index (:name index)
+                       :source (:id source)
+                       :index-allowed normalized-index-allowed
+                       :source-allowed normalized-source-allowed})))))
+
+(defn- validate-configured-locale!
+  [index source allowed locale]
+  (let [normalized-locale (lang/require-supported-locale! locale)
+        normalized-allowed (set (map lang/normalize-locale allowed))]
+    (when (and (seq normalized-allowed)
+               (not (contains? normalized-allowed normalized-locale)))
+      (throw (ex-info (str "Invalid language config for index " (:name index)
+                           ": source " (:id source)
+                           " configured locale is not allowed")
+                      {:type :alida.config/configured-language-not-allowed
+                       :index (:name index)
+                       :source (:id source)
+                       :locale normalized-locale
+                       :allowed normalized-allowed})))))
+
+(defn- validate-language-config!
+  [index]
+  (let [index-languages (:languages index)]
+    (validate-locales! index [:languages :allowed] (:allowed index-languages))
+    (validate-fallback! index [:languages :fallback] (:allowed index-languages) (:fallback index-languages))
+    (doseq [source (:sources index)
+            :let [source-language (:language source)]]
+      (validate-locales! index [:sources (:id source) :language :allowed] (:allowed source-language))
+      (validate-source-allowed-subset! index source (:allowed index-languages) (:allowed source-language))
+      (validate-fallback! index
+                          [:sources (:id source) :language :fallback]
+                          (or (:allowed source-language) (:allowed index-languages))
+                          (:fallback source-language))
+      (when (= "configured" (:mode source-language))
+        (when-not (:locale source-language)
+          (throw (ex-info (str "Invalid language config for index " (:name index)
+                               ": source " (:id source)
+                               " uses configured language mode without locale")
+                          {:type :alida.config/missing-configured-language-locale
+                           :index (:name index)
+                           :source (:id source)})))
+        (validate-locales! index [:sources (:id source) :language :locale] [(:locale source-language)])
+        (validate-configured-locale! index
+                                     source
+                                     (or (:allowed source-language) (:allowed index-languages))
+                                     (:locale source-language)))))
+  index)
+
 (defn- validate-indexes!
   [config]
   (doseq [index (:indexes config)]
     (validate-required-embedding-keys! index)
     (validate-positive-embedding-options! index)
+    (validate-language-config! index)
     (validate-chunking! index))
   config)
 

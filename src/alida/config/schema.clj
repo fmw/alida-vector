@@ -14,6 +14,19 @@
    [:max_tokens :int]
    [:safety_multiplier :double]])
 
+(def IndexLanguages
+  [:map {:closed false}
+   [:allowed {:optional true} [:sequential :string]]
+   [:fallback {:optional true} :string]])
+
+(def SourceLanguage
+  [:map {:closed false}
+   [:mode {:optional true} [:enum "auto" "html" "detect" "configured"]]
+   [:allowed {:optional true} [:sequential :string]]
+   [:locale {:optional true} :string]
+   [:fallback {:optional true} :string]
+   [:html_selectors {:optional true} [:sequential :string]]])
+
 (def Embedding
   [:map
    [:provider [:enum "openai" "azure-openai" "vertex-ai"]]
@@ -34,7 +47,8 @@
 (def Source
   [:map {:closed false}
    [:id :string]
-   [:type [:enum "website" "jira-service-management" "s3" "gcs" "local"]]])
+   [:type [:enum "website" "jira-service-management" "s3" "gcs" "local"]]
+   [:language {:optional true} SourceLanguage]])
 
 (def Verification
   [:map
@@ -78,6 +92,7 @@
   [:map
    [:name :string]
    [:auto_activate {:optional true} :boolean]
+   [:languages {:optional true} IndexLanguages]
    [:embedding Embedding]
    [:chunking Chunking]
    [:sources [:sequential Source]]])
