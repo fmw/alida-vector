@@ -81,6 +81,28 @@
     (is (= 1 (:document_count result)))
     (is (= 0 (:error_count result)))))
 
+(deftest process-source-records-thrown-fetch-exceptions-as-item-errors
+  (let [item {:source_id "fixtures"
+              :source_type "local"
+              :canonical_url "file:///tmp/alida-crawl-throws.html"
+              :path "/tmp/alida-crawl-throws.html"
+              :content_type "text/html"}
+        result (with-redefs [source/discover (fn [_ _] [item])
+                             source/fetch (fn [_ _ _]
+                                            (throw (ex-info "fetch exploded"
+                                                            {:type :test/fetch-exploded})))]
+                 (crawl/process-source
+                  {}
+                  index-cfg
+                  {:id "fixtures"
+                   :type "local"}))]
+    (is (= 1 (:discovered_count result)))
+    (is (= 0 (:document_count result)))
+    (is (= 1 (:error_count result)))
+    (is (= :alida.crawl/exception (-> result :errors first :type)))
+    (is (= "fetch exploded" (-> result :errors first :message)))
+    (is (= :test/fetch-exploded (-> result :errors first :data :type)))))
+
 (deftest crawl-continues-with-other-indexes-after-one-index-fails
   (let [sys {:alida/config {:indexes [{:name "broken"} {:name "ok"}]}}]
     (with-redefs [crawl/crawl-index! (fn [_ _ index-cfg]
