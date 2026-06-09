@@ -17,6 +17,8 @@
 (def verification-verdicts
   #{"caution" "fail" "pass"})
 
+(def default-reuse-candidate-run-limit 5)
+
 (def non-terminal-statuses
   #{"created" "crawling" "embedding" "verifying"})
 
@@ -64,6 +66,10 @@
     (f connectable)
     (with-open [conn (jdbc/get-connection connectable)]
       (f conn))))
+
+(defn- text-array
+  [^Connection conn values]
+  (.createArrayOf conn "text" (into-array String values)))
 
 (defn- require-connection!
   [connectable]
@@ -138,25 +144,28 @@
    jdbc-opts))
 
 (defn create-run!
-  [connectable index-cfg structural-config-hash]
+  ([connectable index-cfg structural-config-hash]
+   (create-run! connectable index-cfg structural-config-hash {}))
+  ([connectable index-cfg structural-config-hash metadata]
   (jdbc/with-transaction [tx connectable]
     (ensure-index! tx index-cfg)
     (let [run (jdbc/execute-one!
                tx
                ["INSERT INTO alida_runs
-                 (index_name, lifecycle_status, embedding_dimensions, structural_config_hash)
-                 VALUES (?, ?, ?, ?)
+                 (index_name, lifecycle_status, embedding_dimensions, structural_config_hash, metadata)
+                 VALUES (?, ?, ?, ?, ?)
                  RETURNING *"
                 (:name index-cfg)
                 "created"
                 (get-in index-cfg [:embedding :embedding_dimensions])
-                structural-config-hash]
+                structural-config-hash
+                (jsonb metadata)]
                jdbc-opts)]
       (record-event! tx {:run_id (:id run)
                          :index_name (:index_name run)
                          :event_type "run-created"
                          :details {:lifecycle_status (:lifecycle_status run)}})
-      run)))
+      run))))
 
 (defn upsert-source!
   [connectable run source-cfg structural-config-hash {:keys [document_count error_count metadata]}]
@@ -204,19 +213,21 @@
 
 (defn- vector-literal
   [embedding]
-  (str "[" (str/join "," embedding) "]"))
+  (if (string? embedding)
+    embedding
+    (str "[" (str/join "," embedding) "]")))
 
 (defn insert-chunks!
   [connectable embedding-dimensions run source-cfg document-row chunks]
   (let [table-name (pgvector/dimension-table-name embedding-dimensions)]
-    (doseq [{:keys [chunk_index chunk_count content embedding estimated_tokens heading_path metadata]} chunks]
+    (doseq [{:keys [chunk_index chunk_count content_hash content embedding estimated_tokens heading_path metadata]} chunks]
       (jdbc/execute-one!
        connectable
        [(format
          "INSERT INTO %s
-            (run_id, source_id, document_id, chunk_index, chunk_count, content,
+            (run_id, source_id, document_id, chunk_index, chunk_count, content_hash, content,
              embedding, estimated_tokens, heading_path, metadata)
-          VALUES (?, ?, ?, ?, ?, ?, ?::vector, ?, ?, ?)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?::vector, ?, ?, ?)
           RETURNING id"
          table-name)
         (:id run)
@@ -224,12 +235,59 @@
         (:id document-row)
         chunk_index
         chunk_count
+        content_hash
         content
         (vector-literal embedding)
         estimated_tokens
         (jsonb (or heading_path []))
         (jsonb (or metadata {}))]
        jdbc-opts))))
+
+(defn reusable-embeddings
+  ([connectable embedding-dimensions index-name embedding-fingerprint content-hashes]
+   (reusable-embeddings connectable
+                        embedding-dimensions
+                        index-name
+                        embedding-fingerprint
+                        content-hashes
+                        {}))
+  ([connectable embedding-dimensions index-name embedding-fingerprint content-hashes {:keys [candidate-run-limit]}]
+   (let [content-hashes (vec (remove str/blank? (distinct content-hashes)))]
+     (if (seq content-hashes)
+       (with-connection
+         connectable
+         (fn [conn]
+           (let [table-name (pgvector/dimension-table-name embedding-dimensions)
+                 candidate-run-limit (or candidate-run-limit default-reuse-candidate-run-limit)
+                 rows (jdbc/execute!
+                       conn
+                       [(format
+                         "WITH candidate_runs AS (
+                           SELECT id, started_at
+                           FROM alida_runs
+                           WHERE index_name = ?
+                             AND embedding_dimensions = ?
+                             AND metadata->>'embedding_fingerprint' = ?
+                             AND lifecycle_status IN ('complete', 'activated', 'superseded')
+                           ORDER BY started_at DESC
+                           LIMIT ?
+                         )
+                         SELECT DISTINCT ON (c.content_hash)
+                           c.content_hash,
+                           c.embedding::text AS embedding
+                         FROM %s c
+                         JOIN candidate_runs r ON r.id = c.run_id
+                         WHERE c.content_hash = ANY(?)
+                         ORDER BY c.content_hash, r.started_at DESC"
+                         table-name)
+                        index-name
+                        embedding-dimensions
+                        embedding-fingerprint
+                        candidate-run-limit
+                        (text-array conn content-hashes)]
+                       jdbc-opts)]
+             (into {} (map (juxt :content_hash :embedding)) rows))))
+       {}))))
 
 (defn get-run
   [connectable value]
@@ -241,7 +299,7 @@
 (defn update-run-status!
   ([connectable value lifecycle-status]
    (update-run-status! connectable value lifecycle-status nil))
-  ([connectable value lifecycle-status {:keys [error_summary verification_verdict]}]
+  ([connectable value lifecycle-status {:keys [error_summary verification_verdict metadata]}]
    (require-lifecycle-status! lifecycle-status)
    (when verification_verdict
      (require-verdict! verification_verdict))
@@ -252,6 +310,7 @@
                   SET lifecycle_status = ?,
                       verification_verdict = COALESCE(?, verification_verdict),
                       error_summary = COALESCE(?, error_summary),
+                      metadata = metadata || COALESCE(?::jsonb, '{}'::jsonb),
                       finished_at = CASE
                         WHEN ? IN ('complete', 'error') AND finished_at IS NULL THEN now()
                         ELSE finished_at
@@ -269,6 +328,7 @@
                  lifecycle-status
                  verification_verdict
                  error_summary
+                 (when metadata (jsonb metadata))
                  lifecycle-status
                  lifecycle-status
                  lifecycle-status

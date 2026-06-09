@@ -1,5 +1,6 @@
 (ns alida.chunk
-  (:require [alida.token :as token]
+  (:require [alida.text :as text]
+            [alida.token :as token]
             [clojure.string :as str]))
 
 (defn- prefixed-text
@@ -24,6 +25,7 @@
                     :language_confidence (:language_confidence document)
                     :heading_path heading-path
                     :chunk_index chunk-index
+                    :content_hash (text/sha-256 content)
                     :content content
                     :estimated_tokens (token/estimate content)
                     :metadata {:source_title (:title document)
