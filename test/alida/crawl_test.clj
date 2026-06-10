@@ -68,6 +68,23 @@
              :alida.source.local/file-not-found}
            (set (map :type (:errors result)))))))
 
+(deftest process-source-records-empty-extracted-pages-as-item-errors
+  (let [file (temp-file ".html"
+                        "<html lang=\"en\"><head><title>Empty</title></head>
+                         <body><div></div></body></html>")
+        result (crawl/process-source
+                {}
+                index-cfg
+                {:id "fixtures"
+                 :type "local"
+                 :path (.getPath file)})]
+    (is (= 1 (:discovered_count result)))
+    (is (= 0 (:document_count result)))
+    (is (= 0 (:chunk_count result)))
+    (is (= 1 (:error_count result)))
+    (is (= :alida.crawl/empty-document (-> result :errors first :type)))
+    (is (= "en" (-> result :errors first :locale)))))
+
 (deftest process-source-deduplicates-discovered-canonical-urls
   (let [file (temp-file ".html" "<h1>Hello</h1><p>This document can be processed.</p>")
         item {:source_id "fixtures"

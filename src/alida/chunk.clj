@@ -3,15 +3,37 @@
             [alida.token :as token]
             [clojure.string :as str]))
 
-(defn- prefixed-text
+(defn- heading-context
   [block]
-  (let [heading-path (when-not (= :heading (:type block))
-                       (:heading_path block))
-        prefix (when (seq heading-path)
-                 (str/join " > " heading-path))]
-    (if (seq prefix)
-      (str prefix "\n" (:text block))
-      (:text block))))
+  (when (and (not= :heading (:type block))
+             (seq (:heading_path block)))
+    (str/join " > " (:heading_path block))))
+
+(defn- part-starting-chunk
+  [max-tokens block part]
+  (if-let [context (heading-context block)]
+    (let [prefixed (str context "\n" part)]
+      (if (<= (token/estimate prefixed) max-tokens)
+        prefixed
+        part))
+    part))
+
+(defn- chunk-starting-parts
+  [max-tokens block]
+  (if-let [context (heading-context block)]
+    (let [context-tokens (token/estimate context)
+          initial-budget (max 1 (- max-tokens context-tokens))]
+      (if (>= context-tokens max-tokens)
+        (token/pieces max-tokens (:text block))
+        (loop [budget initial-budget]
+          (let [parts (token/pieces budget (:text block))]
+            (if (or (= 1 budget)
+                    (every? #(<= (token/estimate (part-starting-chunk max-tokens block %))
+                                 max-tokens)
+                            parts))
+              parts
+              (recur (dec budget)))))))
+    (token/pieces max-tokens (:text block))))
 
 (defn- flush-chunk
   [chunks current document heading-path]
@@ -41,16 +63,19 @@
   (let [max-tokens (or max_tokens 6550)
         step (fn [{:keys [chunks current heading-path]} block]
                (let [block-heading-path (:heading_path block)
-                     parts (token/pieces max-tokens (prefixed-text block))]
+                     parts (chunk-starting-parts max-tokens block)]
                  (reduce
                   (fn [{:keys [chunks current heading-path]} part]
-                    (let [candidate-parts (conj (:parts current) part)
+                    (let [part (if (seq (:parts current))
+                                 part
+                                 (part-starting-chunk max-tokens block part))
+                          candidate-parts (conj (:parts current) part)
                           candidate-content (str/join "\n\n" candidate-parts)
                           candidate-tokens (token/estimate candidate-content)]
                       (if (and (seq (:parts current))
                                (> candidate-tokens max-tokens))
                         {:chunks (flush-chunk chunks current document heading-path)
-                         :current {:parts [part]}
+                         :current {:parts [(part-starting-chunk max-tokens block part)]}
                          :heading-path block-heading-path}
                         {:chunks chunks
                          :current {:parts candidate-parts}
