@@ -223,12 +223,27 @@
                                      (:locale source-language)))))
   index)
 
+(defn- validate-source-concurrency!
+  [index]
+  (doseq [source (:sources index)
+          :let [max-concurrency (:max_concurrency source)]
+          :when (and (some? max-concurrency) (not (pos-int? max-concurrency)))]
+    (throw (ex-info (str "Invalid source config for index " (:name index)
+                         ": source " (:id source)
+                         " max_concurrency must be positive")
+                    {:type :alida.config/invalid-source-concurrency
+                     :index (:name index)
+                     :source (:id source)
+                     :value max-concurrency})))
+  index)
+
 (defn- validate-indexes!
   [config]
   (doseq [index (:indexes config)]
     (validate-required-embedding-keys! index)
     (validate-positive-embedding-options! index)
     (validate-language-config! index)
+    (validate-source-concurrency! index)
     (validate-chunking! index))
   config)
 

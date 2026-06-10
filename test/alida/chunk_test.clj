@@ -30,6 +30,7 @@
     (is (= "en" (:locale (first chunks))))
     (is (= :detected (:language_source (first chunks))))
     (is (= 0.99 (:language_confidence (first chunks))))
+    (is (= 64 (count (:content_hash (first chunks)))))
     (is (not (re-find #"Getting started\nGetting started" (:content (first chunks)))))
     (is (every? pos-int? (map :estimated_tokens chunks)))
     (is (some #(= ["Getting started" "Advanced"] (:heading_path %)) chunks))))

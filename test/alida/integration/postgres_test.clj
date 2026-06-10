@@ -77,24 +77,33 @@
                  (fn [db-config _ds]
                    (db/migrate! {:database db-config})
                    (with-open [ds (db/datasource db-config)]
-                     (jdbc/execute!
-                      ds
-                      ["SELECT relname, relkind
-                        FROM pg_class
-                        WHERE relname IN (
-                          'alida_chunks_1536',
-                          'alida_chunks_3072',
-                          'alida_live_chunks_1536',
-                          'alida_live_chunks_3072')
-                        ORDER BY relname"]
-                      db/jdbc-opts))))]
+                     {:relations (jdbc/execute!
+                                  ds
+                                  ["SELECT relname, relkind
+                                    FROM pg_class
+                                    WHERE relname IN (
+                                      'alida_chunks_1536',
+                                      'alida_chunks_3072',
+                                      'alida_live_chunks_1536',
+                                      'alida_live_chunks_3072')
+                                    ORDER BY relname"]
+                                  db/jdbc-opts)
+                      :reuse-index (:indexname
+                                    (jdbc/execute-one!
+                                     ds
+                                     ["SELECT indexname
+                                       FROM pg_indexes
+                                       WHERE indexname = 'alida_runs_embedding_reuse_idx'"]
+                                     db/jdbc-opts))})))]
     (if (= :skipped result)
       (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
-      (is (= [{:relname "alida_chunks_1536" :relkind "p"}
-              {:relname "alida_chunks_3072" :relkind "p"}
-              {:relname "alida_live_chunks_1536" :relkind "v"}
-              {:relname "alida_live_chunks_3072" :relkind "v"}]
-             result)))))
+      (do
+        (is (= [{:relname "alida_chunks_1536" :relkind "p"}
+                {:relname "alida_chunks_3072" :relkind "p"}
+                {:relname "alida_live_chunks_1536" :relkind "v"}
+                {:relname "alida_live_chunks_3072" :relkind "v"}]
+               (:relations result)))
+        (is (= "alida_runs_embedding_reuse_idx" (:reuse-index result)))))))
 
 (deftest ^:integration lifecycle-and-live-view-round-trip
   (let [result (with-temp-database
@@ -121,8 +130,8 @@
                              RETURNING id
                            )
                            INSERT INTO alida_chunks_1536
-                             (run_id, source_id, document_id, chunk_index, chunk_count, content, embedding, estimated_tokens)
-                           SELECT ?, 'support', id, 0, 1, 'Example content', "
+                             (run_id, source_id, document_id, chunk_index, chunk_count, content_hash, content, embedding, estimated_tokens)
+                           SELECT ?, 'support', id, 0, 1, 'chunk-hash', 'Example content', "
                           (zero-vector-sql 1536)
                           ", 2 FROM doc")
                          (:id run-1)
@@ -131,7 +140,7 @@
                                     (db/list-runs ds {:limit 10}))
                         :live-chunks (jdbc/execute!
                                       ds
-                                      ["SELECT index_name, source_id, content, estimated_tokens
+                                      ["SELECT index_name, source_id, canonical_url, title, locale, content_hash, content, estimated_tokens
                                         FROM alida_live_chunks_1536"]
                                       db/jdbc-opts)
                         :events (:n (jdbc/execute-one!
@@ -145,6 +154,10 @@
                (set (map :lifecycle_status (:runs result)))))
         (is (= [{:index_name "support-knowledge-base"
                  :source_id "support"
+                 :canonical_url "https://example.test/article"
+                 :title nil
+                 :locale nil
+                 :content_hash "chunk-hash"
                  :content "Example content"
                  :estimated_tokens 2}]
                (:live-chunks result)))
@@ -184,7 +197,7 @@
                                       db/jdbc-opts)
                           :chunks (jdbc/execute!
                                    ds
-                                   ["SELECT source_id, content, estimated_tokens
+                                   ["SELECT source_id, content_hash, content, estimated_tokens
                                      FROM alida_chunks_1536
                                      WHERE run_id = ?"
                                     (:run_id summary)]
@@ -205,8 +218,90 @@
         (is (= "en" (-> result :documents first :locale)))
         (is (= 64 (count (-> result :documents first :normalized_content_hash))))
         (is (= "fixtures" (-> result :chunks first :source_id)))
+        (is (= 64 (count (-> result :chunks first :content_hash))))
         (is (str/includes? (-> result :chunks first :content) "Support"))
         (is (pos-int? (-> result :chunks first :estimated_tokens)))))))
+
+(deftest ^:integration crawl-index-reuses-unchanged-chunk-embeddings
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (let [file (temp-file ".html"
+                                         "<html lang=\"en\"><head><title>Support</title></head>
+                                          <body><h1>Support</h1><p>This page explains how support works.</p></body></html>")
+                         test-index (assoc index-cfg
+                                           :sources [{:id "fixtures"
+                                                      :type "local"
+                                                      :path (.getPath file)}])
+                         sys {:alida/config {:alida.config/structural-hash "hash-1"
+                                             :indexes [test-index]}}
+                         embedded-texts (atom [])]
+                     (with-redefs [embed/embed-batch (fn [_ _ texts]
+                                                       (swap! embedded-texts conj (vec texts))
+                                                       (mapv (fn [_] (zero-vector 1536)) texts))]
+                       (let [first-summary (crawl/crawl-index! sys ds test-index)
+                             second-summary (crawl/crawl-index! sys ds test-index)]
+                         {:first-summary first-summary
+                          :second-summary second-summary
+                          :embedded-texts @embedded-texts
+                          :second-chunks (jdbc/execute!
+                                          ds
+                                          ["SELECT content_hash, embedding::text AS embedding
+                                            FROM alida_chunks_1536
+                                            WHERE run_id = ?"
+                                           (:run_id second-summary)]
+                                          db/jdbc-opts)})))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (testing "unchanged chunks copy vectors from a compatible previous run"
+        (is (= 1 (count (:embedded-texts result))))
+        (is (= 1 (get-in result [:first-summary :embedding_stats :embedding_request_count])))
+        (is (= 0 (get-in result [:first-summary :embedding_stats :reused_chunk_count])))
+        (is (= 0 (get-in result [:second-summary :embedding_stats :embedding_request_count])))
+        (is (= 1 (get-in result [:second-summary :embedding_stats :reused_chunk_count])))
+        (is (nat-int? (get-in result [:second-summary :embedding_stats :reuse_lookup_duration_ms])))
+        (is (nat-int? (get-in result [:second-summary :embedding_stats :provider_duration_ms])))
+        (is (= 1 (count (:second-chunks result))))
+        (is (= 64 (count (-> result :second-chunks first :content_hash))))))))
+
+(deftest ^:integration crawl-index-does-not-reuse-embeddings-after-provider-endpoint-change
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (let [file (temp-file ".html"
+                                         "<html lang=\"en\"><head><title>Support</title></head>
+                                          <body><h1>Support</h1><p>This page explains how support works.</p></body></html>")
+                         base-index (assoc index-cfg
+                                           :embedding {:provider "azure-openai"
+                                                       :endpoint "https://first.example.openai.azure.com/"
+                                                       :deployment_name "embedding"
+                                                       :api_version "2024-02-01"
+                                                       :api_key "test"
+                                                       :embedding_dimensions 1536}
+                                           :sources [{:id "fixtures"
+                                                      :type "local"
+                                                      :path (.getPath file)}])
+                         changed-index (assoc-in base-index
+                                                 [:embedding :endpoint]
+                                                 "https://second.example.openai.azure.com/")
+                         sys {:alida/config {:alida.config/structural-hash "hash-1"
+                                             :indexes [base-index]}}
+                         embedded-texts (atom [])]
+                     (with-redefs [embed/embed-batch (fn [_ _ texts]
+                                                       (swap! embedded-texts conj (vec texts))
+                                                       (mapv (fn [_] (zero-vector 1536)) texts))]
+                       (let [first-summary (crawl/crawl-index! sys ds base-index)
+                             second-summary (crawl/crawl-index! sys ds changed-index)]
+                         {:first-summary first-summary
+                          :second-summary second-summary
+                          :embedded-texts @embedded-texts})))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (testing "provider endpoint changes invalidate embedding reuse"
+        (is (= 2 (count (:embedded-texts result))))
+        (is (= 1 (get-in result [:first-summary :embedding_stats :embedding_request_count])))
+        (is (= 1 (get-in result [:second-summary :embedding_stats :embedding_request_count])))
+        (is (= 0 (get-in result [:second-summary :embedding_stats :reused_chunk_count])))))))
 
 (deftest ^:integration lifecycle-guards-invalid-transitions
   (let [result (with-temp-database

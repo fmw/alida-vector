@@ -447,6 +447,7 @@ indexes:
         allowed_url_prefixes: [https://example.test/docs/]
         denied_urls: [https://example.test/docs/secret]
         denied_url_prefixes: [https://example.test/private/]
+        max_concurrency: 7
 ")
       (let [index (-> (config/load-config (.getPath file)) :indexes first)
             sources (:sources index)]
@@ -455,6 +456,7 @@ indexes:
         (is (= ["local" "website"] (mapv :type sources)))
         (is (= ["html" "md"] (-> sources first :include_extensions)))
         (is (= ["https://example.test/docs/"] (-> sources second :allowed_url_prefixes)))
-        (is (= ["https://example.test/docs/secret"] (-> sources second :denied_urls))))
+        (is (= ["https://example.test/docs/secret"] (-> sources second :denied_urls)))
+        (is (= 7 (-> sources second :max_concurrency))))
       (finally
         (.delete file)))))

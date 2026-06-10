@@ -42,7 +42,12 @@
     (is (= "nl" (:locale document)))
     (is (= :html (:language_source document)))
     (is (= 64 (count (:normalized_content_hash document))))
-    (is (pos-int? (-> document-result :chunks first :estimated_tokens)))))
+    (is (pos-int? (-> document-result :chunks first :estimated_tokens)))
+    (is (nat-int? (get-in result [:crawl_stats :discover_duration_ms])))
+    (is (nat-int? (get-in result [:crawl_stats :fetch_duration_ms])))
+    (is (nat-int? (get-in result [:crawl_stats :extract_duration_ms])))
+    (is (nat-int? (get-in result [:crawl_stats :language_duration_ms])))
+    (is (nat-int? (get-in result [:crawl_stats :chunk_duration_ms])))))
 
 (deftest process-source-keeps-item-level-errors
   (let [html-file (temp-file ".html" "<h1>Hello</h1><p>This document can be processed.</p>")
@@ -102,6 +107,34 @@
     (is (= :alida.crawl/exception (-> result :errors first :type)))
     (is (= "fetch exploded" (-> result :errors first :message)))
     (is (= :test/fetch-exploded (-> result :errors first :data :type)))))
+
+(deftest process-source-uses-bounded-parallelism
+  (let [items (mapv (fn [i]
+                      {:source_id "fixtures"
+                       :source_type "local"
+                       :canonical_url (str "https://example.test/" i)
+                       :content_type "text/html"})
+                    (range 6))
+        active (atom 0)
+        max-active (atom 0)]
+    (with-redefs [source/discover (fn [_ _] items)
+                  source/fetch (fn [_ _ item]
+                                 (let [current (swap! active inc)]
+                                   (swap! max-active max current)
+                                   (Thread/sleep 50)
+                                   (swap! active dec))
+                                 (assoc item
+                                        :body "<html lang=\"en\"><body><h1>Hello</h1><p>This document can be processed.</p></body></html>"))]
+      (let [result (crawl/process-source
+                    {}
+                    index-cfg
+                    {:id "fixtures"
+                     :type "local"
+                     :max_concurrency 2})]
+        (is (= 6 (:document_count result)))
+        (is (= 2 @max-active))
+        (is (= 2 (get-in result [:crawl_stats :max_concurrency])))
+        (is (pos-int? (get-in result [:crawl_stats :fetch_duration_ms])))))))
 
 (deftest crawl-continues-with-other-indexes-after-one-index-fails
   (let [sys {:alida/config {:indexes [{:name "broken"} {:name "ok"}]}}]
