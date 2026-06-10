@@ -25,6 +25,14 @@
     (is (= (config/structural-config-hash (assoc-in valid-config [:verification :api_key] "a"))
            (config/structural-config-hash (assoc-in valid-config [:verification :api_key] "b"))))))
 
+(deftest structural-hash-keeps-token-limit-settings
+  (testing "non-secret token limit fields remain structural"
+    (is (not= (config/structural-config-hash (assoc-in valid-config [:indexes 0 :chunking :max_tokens] 5000))
+              (config/structural-config-hash (assoc-in valid-config [:indexes 0 :chunking :max_tokens] 6000)))))
+  (testing "credentials_path is treated as configuration, not a resolved secret value"
+    (is (not= (config/structural-config-hash (assoc-in valid-config [:indexes 0 :embedding :credentials_path] "/tmp/a.json"))
+              (config/structural-config-hash (assoc-in valid-config [:indexes 0 :embedding :credentials_path] "/tmp/b.json"))))))
+
 (deftest storage-metadata-is-normalized-to-database-config
   (let [file (java.io.File/createTempFile "alida-storage" ".yml")]
     (try
