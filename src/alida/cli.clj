@@ -105,12 +105,21 @@
     "No runs found."))
 
 (defn- format-crawled-run
-  [{:keys [run_id index_name document_count chunk_count error_count verification_verdict]}]
-  (format "%s  %s  documents=%s  chunks=%s  errors=%s  verdict=%s"
+  [{:keys [run_id index_name document_count chunk_count error_count verification_verdict embedding_stats phase_stats]}]
+  (format "%s  %s  documents=%s  chunks=%s  crawl_ms=%s  fetch_ms=%s  extract_ms=%s  chunk_ms=%s  reused=%s  embedded=%s  requests=%s  reuse_ms=%s  provider_ms=%s  errors=%s  verdict=%s"
           run_id
           index_name
           document_count
           chunk_count
+          (or (:crawl_duration_ms phase_stats) 0)
+          (or (:fetch_duration_ms phase_stats) 0)
+          (or (:extract_duration_ms phase_stats) 0)
+          (or (:chunk_duration_ms phase_stats) 0)
+          (or (:reused_chunk_count embedding_stats) 0)
+          (or (:embedded_chunk_count embedding_stats) 0)
+          (or (:embedding_request_count embedding_stats) 0)
+          (or (:reuse_lookup_duration_ms embedding_stats) 0)
+          (or (:provider_duration_ms embedding_stats) 0)
           error_count
           verification_verdict))
 

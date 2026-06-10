@@ -72,6 +72,24 @@
     (is (= [[0.1]] result))
     (is (= [12] @sleeps))))
 
+(deftest embedding-retries-honor-retry-after-header
+  (let [responses (atom [{:status 429
+                          :headers {"Retry-After" "2"}
+                          :body "{\"error\":\"rate limited\"}"}
+                         (json-response {:data [{:index 0 :embedding [0.1]}]})])
+        requests (atom [])
+        sleeps (atom [])
+        result (embed/embed-batch
+                (fake-sys responses requests sleeps)
+                {:provider "openai"
+                 :api_key "openai-key"
+                 :model "text-embedding-3-small"
+                 :max_retries 2
+                 :retry_initial_ms 5}
+                ["a"])]
+    (is (= [[0.1]] result))
+    (is (= [2000] @sleeps))))
+
 (deftest embedding-batches-can-pause-between-provider-calls
   (let [responses (atom [(json-response {:data [{:index 0 :embedding [0.1]}]})
                          (json-response {:data [{:index 0 :embedding [0.2]}]})

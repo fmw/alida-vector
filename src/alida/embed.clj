@@ -1,6 +1,8 @@
 (ns alida.embed
   (:require [clojure.data.json :as json]
-            [hato.client :as http]))
+            [hato.client :as http])
+  (:import [java.time Instant ZonedDateTime]
+           [java.time.format DateTimeFormatter]))
 
 (def default-max-batch-size 96)
 (def default-max-retries 3)
@@ -59,6 +61,28 @@
   (or (= 429 status)
       (<= 500 status 599)))
 
+(defn- header-value
+  [headers k]
+  (or (get headers k)
+      (get headers (.toLowerCase k))
+      (get headers (.toUpperCase k))))
+
+(defn- parse-long-safe
+  [value]
+  (try
+    (Long/parseLong (str value))
+    (catch Exception _ nil)))
+
+(defn retry-after-ms
+  [headers]
+  (when-let [value (header-value headers "Retry-After")]
+    (or (some-> value parse-long-safe (* 1000))
+        (try
+          (let [retry-at (.toInstant (ZonedDateTime/parse value DateTimeFormatter/RFC_1123_DATE_TIME))
+                millis (- (.toEpochMilli retry-at) (.toEpochMilli (Instant/now)))]
+            (max 0 millis))
+          (catch Exception _ nil)))))
+
 (defn request-json!
   [sys request]
   (let [response (request! sys request)
@@ -69,6 +93,8 @@
                       {:type :alida.embed/http-error
                        :status status
                        :body (:body response)
+                       :headers (:headers response)
+                       :retry-after-ms (retry-after-ms (:headers response))
                        :retryable (retryable-status? status)})))))
 
 (defn with-retries
@@ -76,8 +102,8 @@
   (let [max-retries (or (:max_retries provider-cfg) default-max-retries)
         retry-initial-ms (or (:retry_initial_ms provider-cfg) default-retry-initial-ms)
         retry-jitter-ms (or (:retry_jitter_ms provider-cfg) default-retry-jitter-ms)
-        retry-delay-ms (fn [delay-ms]
-                         (+ delay-ms
+        retry-delay-ms (fn [delay-ms retry-after-ms]
+                         (+ (max delay-ms (or retry-after-ms 0))
                             (if (pos? retry-jitter-ms)
                               (random-int sys (inc retry-jitter-ms))
                               0)))]
@@ -88,7 +114,8 @@
                   (let [{:keys [retryable]} (ex-data e)]
                     (if (and retryable (< attempt-number max-retries))
                       (do
-                        (sleep! sys (retry-delay-ms delay-ms))
+                        (sleep! sys (retry-delay-ms delay-ms
+                                                    (:retry-after-ms (ex-data e))))
                         (attempt (inc attempt-number) (* 2 delay-ms)))
                       (throw e))))))]
       (attempt 1 retry-initial-ms))))

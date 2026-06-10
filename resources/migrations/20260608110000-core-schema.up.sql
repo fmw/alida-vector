@@ -31,6 +31,10 @@ CREATE TABLE alida_runs (
 );
 --;;
 
+CREATE INDEX alida_runs_embedding_reuse_idx
+  ON alida_runs(index_name, embedding_dimensions, (metadata->>'embedding_fingerprint'), started_at DESC);
+--;;
+
 ALTER TABLE alida_indexes
   ADD CONSTRAINT alida_indexes_live_run_fk
   FOREIGN KEY (live_run_id) REFERENCES alida_runs(id);
@@ -166,6 +170,7 @@ CREATE TABLE alida_chunks_1536 (
   document_id uuid NOT NULL REFERENCES alida_documents(id) ON DELETE CASCADE,
   chunk_index integer NOT NULL,
   chunk_count integer NOT NULL,
+  content_hash text NOT NULL,
   content text NOT NULL,
   embedding vector(1536) NOT NULL,
   estimated_tokens integer NOT NULL,
@@ -177,6 +182,10 @@ CREATE TABLE alida_chunks_1536 (
 ) PARTITION BY LIST (run_id);
 --;;
 
+CREATE INDEX alida_chunks_1536_content_hash_idx
+  ON alida_chunks_1536(content_hash);
+--;;
+
 CREATE TABLE alida_chunks_3072 (
   id uuid DEFAULT gen_random_uuid(),
   run_id uuid NOT NULL REFERENCES alida_runs(id) ON DELETE CASCADE,
@@ -184,6 +193,7 @@ CREATE TABLE alida_chunks_3072 (
   document_id uuid NOT NULL REFERENCES alida_documents(id) ON DELETE CASCADE,
   chunk_index integer NOT NULL,
   chunk_count integer NOT NULL,
+  content_hash text NOT NULL,
   content text NOT NULL,
   embedding vector(3072) NOT NULL,
   estimated_tokens integer NOT NULL,
@@ -195,19 +205,28 @@ CREATE TABLE alida_chunks_3072 (
 ) PARTITION BY LIST (run_id);
 --;;
 
+CREATE INDEX alida_chunks_3072_content_hash_idx
+  ON alida_chunks_3072(content_hash);
+--;;
+
 CREATE VIEW alida_live_chunks_1536 AS
 SELECT
   i.name AS index_name,
   c.run_id,
   c.document_id,
   c.source_id,
+  d.canonical_url,
+  d.title,
+  d.locale,
+  c.content_hash,
   c.content,
   c.embedding,
   c.metadata,
   c.heading_path,
   c.estimated_tokens
 FROM alida_chunks_1536 c
-JOIN alida_indexes i ON i.live_run_id = c.run_id;
+JOIN alida_indexes i ON i.live_run_id = c.run_id
+JOIN alida_documents d ON d.id = c.document_id;
 --;;
 
 CREATE VIEW alida_live_chunks_3072 AS
@@ -216,10 +235,15 @@ SELECT
   c.run_id,
   c.document_id,
   c.source_id,
+  d.canonical_url,
+  d.title,
+  d.locale,
+  c.content_hash,
   c.content,
   c.embedding,
   c.metadata,
   c.heading_path,
   c.estimated_tokens
 FROM alida_chunks_3072 c
-JOIN alida_indexes i ON i.live_run_id = c.run_id;
+JOIN alida_indexes i ON i.live_run_id = c.run_id
+JOIN alida_documents d ON d.id = c.document_id;
