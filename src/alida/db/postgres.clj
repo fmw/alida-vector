@@ -530,27 +530,30 @@
          candidates (jdbc/execute!
                      connectable
                      ["SELECT *
+                              , started_at < now() - (? * interval '1 minute') AS stale
                        FROM alida_runs
                        WHERE lifecycle_status IN ('created', 'crawling', 'embedding', 'verifying')
-                         AND started_at < now() - (? * interval '1 minute')
                        ORDER BY started_at"
                       stale-after-minutes]
                      jdbc-opts)]
      (reduce
       (fn [reconciled run]
-        (try
-          (with-index-lock!
-            connectable
-            (:index_name run)
-            #(conj reconciled
-                   (update-run-status!
-                    connectable
-                    (:id run)
-                    "error"
-                    {:error_summary "Marked as orphaned after startup reconciliation"})))
-          (catch Exception e
-            (if (= :alida.db.postgres/index-locked (:type (ex-data e)))
-              reconciled
-              (throw e)))))
+        (let [stale? (:stale run)]
+          (try
+            (with-index-lock!
+              connectable
+              (:index_name run)
+              #(if (or stale? (not= "created" (:lifecycle_status run)))
+                 (conj reconciled
+                       (update-run-status!
+                        connectable
+                        (:id run)
+                        "error"
+                        {:error_summary "Marked as orphaned after startup reconciliation"}))
+                 reconciled))
+            (catch Exception e
+              (if (= :alida.db.postgres/index-locked (:type (ex-data e)))
+                reconciled
+                (throw e))))))
       []
       candidates))))

@@ -382,6 +382,7 @@
 
 (defn crawl!
   [sys ds {:keys [index-name]}]
+  (db/reconcile-orphaned-runs! ds)
   (let [indexes (run/selected-indexes sys index-name)]
     (reduce
      (fn [result index-cfg]
