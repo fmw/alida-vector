@@ -401,6 +401,41 @@
       (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
       (is (= :alida.db.postgres/index-locked (:type result))))))
 
+(deftest ^:integration orphan-reconciliation-marks-unlocked-in-progress-runs
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (let [run (db/create-run! ds index-cfg "hash-1")]
+                     (db/update-run-status! ds (:id run) "crawling")
+                     (db/reconcile-orphaned-runs! ds {:stale-after-minutes 360})
+                     (select-keys (db/get-run ds (:id run))
+                                  [:lifecycle_status :error_summary]))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (do
+        (is (= "error" (:lifecycle_status result)))
+        (is (= "Marked as orphaned after startup reconciliation"
+               (:error_summary result)))))))
+
+(deftest ^:integration orphan-reconciliation-skips-locked-in-progress-runs
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (let [run (db/create-run! ds index-cfg "hash-1")]
+                     (db/update-run-status! ds (:id run) "embedding")
+                     (db/with-index-lock!
+                       ds
+                       (:name index-cfg)
+                       #(do
+                          (db/reconcile-orphaned-runs! ds {:stale-after-minutes 360})
+                          (select-keys (db/get-run ds (:id run))
+                                       [:lifecycle_status :error_summary]))))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (do
+        (is (= "embedding" (:lifecycle_status result)))
+        (is (nil? (:error_summary result)))))))
+
 (deftest ^:integration migration-rollback-removes-alida-objects
   (let [result (with-temp-database
                  (fn [db-config _ds]
