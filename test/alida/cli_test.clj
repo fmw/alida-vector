@@ -72,9 +72,23 @@
         (with-redefs [db/datasource (fn [_]
                                       (reify java.io.Closeable
                                         (close [_] nil)))
-                      db/activate-run! (fn [_ run-id]
+                      db/activate-run! (fn [_ run-id opts]
+                                         (is (= "018c9099-041d-7f5b-9b65-5b8f08f8e61d" run-id))
+                                         (is (= {:allow-caution? nil} opts))
                                          {:id (parse-uuid run-id)})]
           (let [result (cli/run ["activate" "018c9099-041d-7f5b-9b65-5b8f08f8e61d"])]
+            (is (= 0 (:exit-code result)))
+            (is (= "Activated run 018c9099-041d-7f5b-9b65-5b8f08f8e61d." (:message result))))))))
+  (testing "activate with caution override"
+    (with-system-stub
+      (fn []
+        (with-redefs [db/datasource (fn [_]
+                                      (reify java.io.Closeable
+                                        (close [_] nil)))
+                      db/activate-run! (fn [_ run-id opts]
+                                         (is (= {:allow-caution? true} opts))
+                                         {:id (parse-uuid run-id)})]
+          (let [result (cli/run ["activate" "018c9099-041d-7f5b-9b65-5b8f08f8e61d" "--allow-caution"])]
             (is (= 0 (:exit-code result)))
             (is (= "Activated run 018c9099-041d-7f5b-9b65-5b8f08f8e61d." (:message result))))))))
   (testing "reject"
@@ -123,13 +137,13 @@
                                                  :document_count 2
                                                  :chunk_count 3
                                                  :error_count 0
-                                                 :verification_verdict "caution"}]
+                                                 :verification_verdict nil}]
                                     :failed []})]
         (let [result (cli/run ["crawl" "--config" "ignored.yml" "--index" "docs"])]
           (is (= 0 (:exit-code result)))
           (is (str/includes? (:message result) "1 succeeded, 0 failed"))
           (is (str/includes? (:message result) "docs"))
-          (is (str/includes? (:message result) "verdict=caution")))))))
+          (is (str/includes? (:message result) "verdict=-")))))))
 
 (deftest crawl-command-exits-nonzero-when-any-index-fails
   (with-system-stub

@@ -363,8 +363,7 @@
                                ds
                                (:id run)
                                "complete"
-                               {:verification_verdict "caution"
-                                :metadata {:embedding_stats stats
+                               {:metadata {:embedding_stats stats
                                            :phase_stats phase-stats}})]
                 (crawl-summary completed source-results stats phase-stats))))
           (catch Exception e

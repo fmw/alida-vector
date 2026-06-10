@@ -345,7 +345,7 @@
        run))))
 
 (defn- require-activatable-run!
-  [run]
+  [run {:keys [allow-caution?]}]
   (when-not (= "complete" (:lifecycle_status run))
     (throw (ex-info (str "Run is not activatable: " (:id run))
                     {:type :alida.db.postgres/run-not-activatable
@@ -353,7 +353,21 @@
                      :lifecycle-status (:lifecycle_status run)
                      :verification-verdict (:verification_verdict run)
                      :reason :not-complete})))
-  (when-not (= "pass" (:verification_verdict run))
+  (case (:verification_verdict run)
+    "pass" nil
+    "caution" (when-not allow-caution?
+                (throw (ex-info (str "Run is not activatable without allow-caution: " (:id run))
+                                {:type :alida.db.postgres/run-not-activatable
+                                 :run-id (:id run)
+                                 :lifecycle-status (:lifecycle_status run)
+                                 :verification-verdict (:verification_verdict run)
+                                 :reason :caution-requires-override})))
+    nil (throw (ex-info (str "Run is not verified: " (:id run))
+                        {:type :alida.db.postgres/run-not-activatable
+                         :run-id (:id run)
+                         :lifecycle-status (:lifecycle_status run)
+                         :verification-verdict nil
+                         :reason :not-verified}))
     (throw (ex-info (str "Run is not activatable: " (:id run))
                     {:type :alida.db.postgres/run-not-activatable
                      :run-id (:id run)
@@ -398,36 +412,39 @@
       jdbc-opts))))
 
 (defn activate-run!
-  [connectable value]
-  (jdbc/with-transaction [tx connectable]
-    (let [run (get-run tx value)]
-      (when-not run
-        (throw (ex-info (str "Unknown run: " value) {:run-id value})))
-      (require-activatable-run! run)
-      (let [index-row (jdbc/execute-one!
-                       tx
-                       ["SELECT * FROM alida_indexes WHERE name = ? FOR UPDATE" (:index_name run)]
-                       jdbc-opts)
-            previous-live-id (:live_run_id index-row)]
-        (jdbc/execute-one!
-         tx
-         ["UPDATE alida_indexes
-           SET previous_live_run_id = live_run_id,
-               live_run_id = ?,
-               updated_at = now()
-           WHERE name = ?
-           RETURNING *"
-          (:id run)
-          (:index_name run)]
-         jdbc-opts)
-        (when previous-live-id
-          (update-run-status! tx previous-live-id "superseded"))
-        (let [activated (update-run-status! tx (:id run) "activated")]
-          (record-event! tx {:run_id (:id run)
-                             :index_name (:index_name run)
-                             :event_type "run-activated"
-                             :details {:previous_live_run_id previous-live-id}})
-          activated)))))
+  ([connectable value]
+   (activate-run! connectable value {}))
+  ([connectable value opts]
+   (jdbc/with-transaction [tx connectable]
+     (let [run (get-run tx value)]
+       (when-not run
+         (throw (ex-info (str "Unknown run: " value) {:run-id value})))
+       (require-activatable-run! run opts)
+       (let [index-row (jdbc/execute-one!
+                        tx
+                        ["SELECT * FROM alida_indexes WHERE name = ? FOR UPDATE" (:index_name run)]
+                        jdbc-opts)
+             previous-live-id (:live_run_id index-row)]
+         (jdbc/execute-one!
+          tx
+          ["UPDATE alida_indexes
+            SET previous_live_run_id = live_run_id,
+                live_run_id = ?,
+                updated_at = now()
+            WHERE name = ?
+            RETURNING *"
+           (:id run)
+           (:index_name run)]
+          jdbc-opts)
+         (when previous-live-id
+           (update-run-status! tx previous-live-id "superseded"))
+         (let [activated (update-run-status! tx (:id run) "activated")]
+           (record-event! tx {:run_id (:id run)
+                              :index_name (:index_name run)
+                              :event_type "run-activated"
+                              :details {:previous_live_run_id previous-live-id
+                                        :allow_caution (:allow-caution? opts)}})
+           activated))))))
 
 (defn reject-run!
   [connectable value]
