@@ -3,15 +3,21 @@
 
 (def env-reference-pattern #"\$\{([A-Za-z_][A-Za-z0-9_]*)\}")
 
-(def secret-key-fragments
-  ["api-key"
-   "apikey"
-   "authorization"
-   "credentials"
-   "password"
-   "secret"
-   "token"
-   "webhook"])
+(def secret-key-names
+  #{"access-token"
+    "api-key"
+    "apikey"
+    "authorization"
+    "client-secret"
+    "credentials"
+    "id-token"
+    "password"
+    "private-key"
+    "refresh-token"
+    "secret"
+    "slack-webhook-url"
+    "token"
+    "webhook-url"})
 
 (defn interpolate-string
   [s]
@@ -48,7 +54,7 @@
   (let [s (-> (name k)
               (str/replace #"_" "-")
               (str/lower-case))]
-    (boolean (some #(str/includes? s %) secret-key-fragments))))
+    (contains? secret-key-names s)))
 
 (defn redact
   [value]
