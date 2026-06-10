@@ -25,6 +25,7 @@
    ["-n" "--limit N" "Maximum rows to return for list commands"
     :parse-fn parse-long]
    [nil "--json" "Print machine-readable JSON when supported"]
+   [nil "--allow-caution" "For activate: allow activating a verified caution run"]
    [nil "--keep-last N" "For prune: keep the last N runs per index"
     :parse-fn parse-long]
    [nil "--older-than DURATION" "For prune: prune runs older than this duration"]
@@ -42,7 +43,7 @@
     "  crawl                   Crawl configured indexes"
     "  runs                    List runs"
     "  report <run-id>         Print the stored report for a run"
-    "  activate <run-id>       Make a verified run live"
+    "  activate <run-id>       Make a verified pass run live"
     "  reject <run-id>         Mark a run as rejected"
     "  rollback <index-name>   Restore the previous live run for an index"
     "  prune                   Manually prune old non-live run data"
@@ -121,7 +122,7 @@
           (or (:reuse_lookup_duration_ms embedding_stats) 0)
           (or (:provider_duration_ms embedding_stats) 0)
           error_count
-          verification_verdict))
+          (or verification_verdict "-")))
 
 (defn- format-failed-index
   [{:keys [index_name message]}]
@@ -174,9 +175,11 @@
   (not-implemented command sys options arguments))
 
 (defmethod execute "activate"
-  [_ sys _options arguments]
+  [_ sys options arguments]
   (let [run-id (require-arg arguments "run-id")
-        run (with-datasource sys #(db/activate-run! % run-id))]
+        run (with-datasource sys #(db/activate-run! %
+                                                    run-id
+                                                    {:allow-caution? (:allow-caution options)}))]
     {:exit-code 0
      :message (str "Activated run " (:id run) ".")}))
 

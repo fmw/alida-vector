@@ -206,7 +206,7 @@
       (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
       (testing "candidate crawl persists run content"
         (is (= "complete" (get-in result [:run :lifecycle_status])))
-        (is (= "caution" (get-in result [:run :verification_verdict])))
+        (is (nil? (get-in result [:run :verification_verdict])))
         (is (= 1 (get-in result [:summary :document_count])))
         (is (= 1 (get-in result [:summary :chunk_count])))
         (is (= [{:source_id "fixtures"
@@ -309,35 +309,57 @@
                    (db/migrate! {:database db-config})
                    (with-open [ds (db/datasource db-config)]
                      (let [created-run (db/create-run! ds index-cfg "hash-1")
+                           unverified-run (db/create-run! ds index-cfg "hash-1")
+                           caution-run (db/create-run! ds index-cfg "hash-1")
+                           caution-override-run (db/create-run! ds index-cfg "hash-1")
                            failed-run (db/create-run! ds index-cfg "hash-1")
                            run-1 (db/create-run! ds index-cfg "hash-1")
                            run-2 (db/create-run! ds index-cfg "hash-1")]
+                       (db/update-run-status! ds (:id unverified-run) "complete")
+                       (db/update-run-status! ds (:id caution-run) "complete" {:verification_verdict "caution"})
+                       (db/update-run-status! ds (:id caution-override-run) "complete" {:verification_verdict "caution"})
                        (db/update-run-status! ds (:id failed-run) "complete" {:verification_verdict "fail"})
-                       (db/update-run-status! ds (:id run-1) "complete" {:verification_verdict "pass"})
-                       (db/activate-run! ds (:id run-1))
-                       (db/update-run-status! ds (:id run-2) "complete" {:verification_verdict "pass"})
-                       (db/activate-run! ds (:id run-2))
-                       (db/rollback-index! ds (:name index-cfg))
-                       {:created-activation (try
-                                              (db/activate-run! ds (:id created-run))
-                                              :activated
-                                              (catch clojure.lang.ExceptionInfo e
-                                                (ex-data e)))
-                        :failed-activation (try
-                                             (db/activate-run! ds (:id failed-run))
-                                             :activated
-                                             (catch clojure.lang.ExceptionInfo e
-                                               (ex-data e)))
-                        :reject-live (try
-                                       (db/reject-run! ds (:id run-1))
-                                       :rejected
-                                       (catch clojure.lang.ExceptionInfo e
-                                         (ex-data e)))
-                        :reject-previous-live (try
-                                                (db/reject-run! ds (:id run-2))
-                                                :rejected
+                       (let [caution-override-activation (select-keys
+                                                          (db/activate-run! ds
+                                                                            (:id caution-override-run)
+                                                                            {:allow-caution? true})
+                                                          [:id :lifecycle_status :verification_verdict])]
+                         (db/update-run-status! ds (:id run-1) "complete" {:verification_verdict "pass"})
+                         (db/activate-run! ds (:id run-1))
+                         (db/update-run-status! ds (:id run-2) "complete" {:verification_verdict "pass"})
+                         (db/activate-run! ds (:id run-2))
+                         (db/rollback-index! ds (:name index-cfg))
+                         {:created-activation (try
+                                                (db/activate-run! ds (:id created-run))
+                                                :activated
                                                 (catch clojure.lang.ExceptionInfo e
-                                                  (ex-data e)))}))))]
+                                                  (ex-data e)))
+                          :unverified-activation (try
+                                                   (db/activate-run! ds (:id unverified-run))
+                                                   :activated
+                                                   (catch clojure.lang.ExceptionInfo e
+                                                     (ex-data e)))
+                          :caution-activation (try
+                                                (db/activate-run! ds (:id caution-run))
+                                                :activated
+                                                (catch clojure.lang.ExceptionInfo e
+                                                  (ex-data e)))
+                          :caution-override-activation caution-override-activation
+                          :failed-activation (try
+                                               (db/activate-run! ds (:id failed-run))
+                                               :activated
+                                               (catch clojure.lang.ExceptionInfo e
+                                                 (ex-data e)))
+                          :reject-live (try
+                                         (db/reject-run! ds (:id run-1))
+                                         :rejected
+                                         (catch clojure.lang.ExceptionInfo e
+                                           (ex-data e)))
+                          :reject-previous-live (try
+                                                  (db/reject-run! ds (:id run-2))
+                                                  :rejected
+                                                  (catch clojure.lang.ExceptionInfo e
+                                                    (ex-data e)))})))))]
     (if (= :skipped result)
       (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
       (testing "invalid lifecycle transitions are rejected"
@@ -345,6 +367,14 @@
                (get-in result [:created-activation :type])))
         (is (= :not-complete
                (get-in result [:created-activation :reason])))
+        (is (= :not-verified
+               (get-in result [:unverified-activation :reason])))
+        (is (= :caution-requires-override
+               (get-in result [:caution-activation :reason])))
+        (is (= "activated"
+               (get-in result [:caution-override-activation :lifecycle_status])))
+        (is (= "caution"
+               (get-in result [:caution-override-activation :verification_verdict])))
         (is (= :alida.db.postgres/run-not-activatable
                (get-in result [:failed-activation :type])))
         (is (= :verification-not-pass
