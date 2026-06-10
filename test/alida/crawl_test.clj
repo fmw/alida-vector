@@ -1,5 +1,6 @@
 (ns alida.crawl-test
   (:require [alida.crawl :as crawl]
+            [alida.db.postgres :as db]
             [alida.source :as source]
             [alida.source.local]
             [clojure.string :as str]
@@ -154,13 +155,16 @@
         (is (pos-int? (get-in result [:crawl_stats :fetch_duration_ms])))))))
 
 (deftest crawl-continues-with-other-indexes-after-one-index-fails
-  (let [sys {:alida/config {:indexes [{:name "broken"} {:name "ok"}]}}]
-    (with-redefs [crawl/crawl-index! (fn [_ _ index-cfg]
+  (let [sys {:alida/config {:indexes [{:name "broken"} {:name "ok"}]}}
+        reconciled? (atom false)]
+    (with-redefs [db/reconcile-orphaned-runs! (fn [_] (reset! reconciled? true))
+                  crawl/crawl-index! (fn [_ _ index-cfg]
                                        (if (= "broken" (:name index-cfg))
                                          (throw (ex-info "boom" {:reason :test}))
                                          {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
                                           :index_name (:name index-cfg)}))]
       (let [result (crawl/crawl! sys :ignored {})]
+        (is @reconciled?)
         (is (= ["ok"] (mapv :index_name (:succeeded result))))
         (is (= ["broken"] (mapv :index_name (:failed result))))
         (is (= "boom" (-> result :failed first :message)))))))
