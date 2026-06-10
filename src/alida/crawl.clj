@@ -74,14 +74,23 @@
         (let [language-started (now-ns)
               document (lang/annotate-document index-cfg source-cfg document)
               language-duration-ms (elapsed-ms language-started)
-	              chunk-started (now-ns)
-	              chunks (chunk/section-aware document (:chunking index-cfg))
-	              chunk-duration-ms (elapsed-ms chunk-started)]
-	          {:document (retained-document document)
-	           :chunks chunks
-	           :crawl_stats {:extract_duration_ms extract-duration-ms
-                         :language_duration_ms language-duration-ms
-                         :chunk_duration_ms chunk-duration-ms}})))
+              chunk-started (now-ns)
+              chunks (chunk/section-aware document (:chunking index-cfg))
+              chunk-duration-ms (elapsed-ms chunk-started)
+              crawl-stats {:extract_duration_ms extract-duration-ms
+                           :language_duration_ms language-duration-ms
+                           :chunk_duration_ms chunk-duration-ms}]
+          (if (seq chunks)
+            {:document (retained-document document)
+             :chunks chunks
+             :crawl_stats crawl-stats}
+            {:error {:type :alida.crawl/empty-document
+                     :source_id (:id source-cfg)
+                     :canonical_url (:canonical_url fetched)
+                     :title (:title document)
+                     :locale (:locale document)
+                     :normalized_content_hash (:normalized_content_hash document)}
+             :crawl_stats crawl-stats}))))
     (catch Exception e
       {:error (error-details e {:source_id (:id source-cfg)
                                 :canonical_url (:canonical_url fetched)})})))
