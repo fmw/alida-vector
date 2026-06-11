@@ -31,6 +31,13 @@
      <url><loc>https://example.test/docs/b</loc></url>
    </urlset>")
 
+(defn- sitemap-index-to
+  [url]
+  (str "<?xml version=\"1.0\" encoding=\"UTF-8\"?>
+        <sitemapindex>
+          <sitemap><loc>" url "</loc></sitemap>
+        </sitemapindex>"))
+
 (defn- fake-http
   [responses requests]
   {:alida/http-request (fn [request]
@@ -143,6 +150,42 @@
             "https://example.test/post-sitemap.xml"
             "https://example.test/page-sitemap.xml"]
            (mapv :url @requests)))))
+
+(deftest sitemap-recursion-depth-is-capped
+  (let [requests (atom [])
+        sys (fake-http {"https://example.test/sitemap-1.xml" {:status 200
+                                                              :body (sitemap-index-to "https://example.test/sitemap-2.xml")}
+                        "https://example.test/sitemap-2.xml" {:status 200
+                                                              :body (sitemap-index-to "https://example.test/sitemap-3.xml")}
+                        "https://example.test/sitemap-3.xml" {:status 200
+                                                              :body page-sitemap}}
+                       requests)]
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"max_sitemap_depth"
+         (source/discover sys {:id "site"
+                               :type "website"
+                               :sitemap_url "https://example.test/sitemap-1.xml"
+                               :max_sitemap_depth 2})))
+    (is (= ["https://example.test/sitemap-1.xml"
+            "https://example.test/sitemap-2.xml"]
+           (mapv :url @requests)))))
+
+(deftest configured-sitemap-depth-allows-deeper-sitemap-chains
+  (let [requests (atom [])
+        sys (fake-http {"https://example.test/sitemap-1.xml" {:status 200
+                                                              :body (sitemap-index-to "https://example.test/sitemap-2.xml")}
+                        "https://example.test/sitemap-2.xml" {:status 200
+                                                              :body (sitemap-index-to "https://example.test/sitemap-3.xml")}
+                        "https://example.test/sitemap-3.xml" {:status 200
+                                                              :body page-sitemap}}
+                       requests)
+        items (source/discover sys {:id "site"
+                                    :type "website"
+                                    :sitemap_url "https://example.test/sitemap-1.xml"
+                                    :max_sitemap_depth 3})]
+    (is (= ["https://example.test/docs/a" "https://example.test/docs/b"]
+           (mapv :canonical_url items)))))
 
 (deftest fetches-website-pages-and-preserves-content-type
   (let [requests (atom [])

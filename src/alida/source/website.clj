@@ -4,11 +4,18 @@
   (:import [org.jsoup Jsoup]
            [org.jsoup.parser Parser]))
 
+(def default-max-sitemap-depth 10)
+
 (defn- sitemap-urls
   [source-cfg]
   (or (seq (:sitemap_urls source-cfg))
       (when-let [url (:sitemap_url source-cfg)]
         [url])))
+
+(defn- max-sitemap-depth
+  [source-cfg]
+  (or (:max_sitemap_depth source-cfg)
+      default-max-sitemap-depth))
 
 (defn- url-allowed?
   [source-cfg url]
@@ -51,10 +58,20 @@
 
 (defn- discover-sitemap
   ([sys source-cfg sitemap-url]
-   (discover-sitemap sys source-cfg #{} sitemap-url))
-  ([sys source-cfg visited sitemap-url]
-   (if (contains? visited sitemap-url)
+   (discover-sitemap sys source-cfg #{} 1 sitemap-url))
+  ([sys source-cfg visited depth sitemap-url]
+   (cond
+     (contains? visited sitemap-url)
      []
+
+     (> depth (max-sitemap-depth source-cfg))
+     (throw (ex-info (str "Sitemap recursion exceeded max_sitemap_depth: " sitemap-url)
+                     {:type :alida.source.website/sitemap-depth-exceeded
+                      :source-id (:id source-cfg)
+                      :sitemap-url sitemap-url
+                      :max-sitemap-depth (max-sitemap-depth source-cfg)}))
+
+     :else
      (let [response (source/require-success!
                      (source/request! sys {:method :get :url sitemap-url})
                      {:source-id (:id source-cfg)
@@ -63,7 +80,7 @@
        (case kind
          :sitemapindex
          (mapv identity
-               (mapcat #(discover-sitemap sys source-cfg (conj visited sitemap-url) %)
+               (mapcat #(discover-sitemap sys source-cfg (conj visited sitemap-url) (inc depth) %)
                        locations))
 
          :urlset

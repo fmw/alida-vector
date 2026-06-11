@@ -49,6 +49,7 @@ indexes:
       - id: blog
         type: website
         sitemap_url: https://example.test/sitemap.xml
+        max_sitemap_depth: 10
         denied_urls:
           - https://example.test/not-for-indexing/
         language:
