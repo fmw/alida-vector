@@ -277,6 +277,20 @@
                      :value max-concurrency})))
   index)
 
+(defn- validate-source-sitemap-depth!
+  [index]
+  (doseq [source (:sources index)
+          :let [max-depth (:max_sitemap_depth source)]
+          :when (and (some? max-depth) (not (pos-int? max-depth)))]
+    (throw (ex-info (str "Invalid source config for index " (:name index)
+                         ": source " (:id source)
+                         " max_sitemap_depth must be positive")
+                    {:type :alida.config/invalid-source-sitemap-depth
+                     :index (:name index)
+                     :source (:id source)
+                     :value max-depth})))
+  index)
+
 (defn- validate-deterministic-thresholds!
   [config]
   (let [thresholds (get-in config [:verification :deterministic_thresholds])]
@@ -306,6 +320,7 @@
     (validate-positive-embedding-options! index)
     (validate-language-config! index)
     (validate-source-concurrency! index)
+    (validate-source-sitemap-depth! index)
     (validate-chunking! index))
   config)
 
