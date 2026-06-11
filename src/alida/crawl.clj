@@ -5,6 +5,7 @@
             [alida.embed :as embed]
             [alida.extract.html :as html]
             [alida.lang :as lang]
+            [alida.notify.slack :as slack]
             [alida.report :as report]
             [alida.run :as run]
             [alida.source :as source]
@@ -504,9 +505,11 @@
                                            phase-stats
                                            run-diff
                                            deterministic-verification
-                                           verification)]
-                (db/save-report! ds (:id run) (report/build summary))
-                summary)))
+                                           verification)
+                    built-report (report/build summary)
+                    _ (db/save-report! ds (:id run) built-report)
+                    notification (slack/post-report! sys built-report)]
+                (assoc summary :notification notification))))
           (catch Exception e
             (throw (ex-info (or (ex-message e) "Crawl failed")
                             (assoc (or (ex-data e) {})
