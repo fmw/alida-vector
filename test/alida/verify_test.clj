@@ -69,6 +69,23 @@
     (is (str/includes? prompt "ignore previous instructions"))
     (is (str/includes? prompt "\"verdict\":\"pass|caution|fail\""))))
 
+(deftest build-prompts-batches-large-document-sets
+  (let [prompts (verify/build-prompts
+                 {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                  :index_name "docs"
+                  :deterministic_verification {:deterministic_verdict "pass"}
+                  :diff {:summary {:added_count 3}}
+                  :max_prompt_tokens 10
+                  :documents [{:canonical_url "https://example.test/1"
+                               :chunks [{:content "first long enough document"}]}
+                              {:canonical_url "https://example.test/2"
+                               :chunks [{:content "second long enough document"}]}
+                              {:canonical_url "https://example.test/3"
+                               :chunks [{:content "third long enough document"}]}]})]
+    (is (< 1 (count prompts)))
+    (is (every? #(str/includes? % "Batch:") prompts))
+    (is (str/includes? (first prompts) "first long enough document"))))
+
 (deftest parse-structured-verdict-validates-verdict
   (is (= {:verdict "caution"
           :reasoning "Suspicious content"

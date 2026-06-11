@@ -353,16 +353,26 @@
       (:deployment_name verification-cfg)
       (:provider verification-cfg)))
 
+(defn- combined-llm-result
+  [results]
+  {:verdict (apply verify/strictest-verdict (map :verdict results))
+   :reasoning (str/join "\n\n" (keep :reasoning results))
+   :findings (vec (mapcat #(or (:findings %) []) results))
+   :security_findings (vec (mapcat #(or (:security_findings %) []) results))
+   :raw_response {:batches (mapv :raw_response results)}})
+
 (defn- verify-run!
   [sys ds run run-diff deterministic-verification source-results]
   (let [verification-cfg (:verification (:alida/config sys))
-        prompt (verify/build-prompt
-                {:run_id (:id run)
-                 :index_name (:index_name run)
-                 :deterministic_verification deterministic-verification
-                 :diff run-diff
-                 :documents (verification-documents source-results run-diff)})
-        llm-result (verify/complete sys verification-cfg prompt)
+        prompts (verify/build-prompts
+                 {:run_id (:id run)
+                  :index_name (:index_name run)
+                  :deterministic_verification deterministic-verification
+                  :diff run-diff
+                  :documents (verification-documents source-results run-diff)
+                  :max_prompt_tokens (:max_prompt_tokens verification-cfg)})
+        llm-result (combined-llm-result
+                    (mapv #(verify/complete sys verification-cfg %) prompts))
         final-verdict (verify/strictest-verdict
                        (:deterministic_verdict deterministic-verification)
                        (:verdict llm-result))

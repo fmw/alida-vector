@@ -68,6 +68,7 @@
    [:model {:optional true} :string]
    [:deployment_name {:optional true} :string]
    [:api_key {:optional true} :string]
+   [:max_prompt_tokens {:optional true} :int]
    [:prompt_policy_version {:optional true} :string]
    [:deterministic_gate_version {:optional true} :string]
    [:deterministic_thresholds {:optional true} DeterministicThresholds]])

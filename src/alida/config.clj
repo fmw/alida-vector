@@ -119,6 +119,16 @@
                        :key k}))))
   config)
 
+(defn- validate-verification-options!
+  [config]
+  (let [max-prompt-tokens (get-in config [:verification :max_prompt_tokens])]
+    (when (and (some? max-prompt-tokens) (not (pos-int? max-prompt-tokens)))
+      (throw (ex-info "Invalid verification config: max_prompt_tokens must be positive"
+                      {:type :alida.config/invalid-verification-provider-config
+                       :key :max_prompt_tokens
+                       :value max-prompt-tokens}))))
+  config)
+
 (defn- validate-positive-embedding-options!
   [index]
   (let [embedding (:embedding index)]
@@ -309,6 +319,7 @@
                    validate-vector-dimensions!
                    validate-deterministic-thresholds!
                    validate-required-verification-keys!
+                   validate-verification-options!
                    validate-indexes!)]
     (assoc config
            :alida.config/path (str path)
