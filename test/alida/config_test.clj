@@ -252,6 +252,70 @@ indexes:
       (finally
         (.delete file)))))
 
+(deftest deterministic-threshold-percentages-are-fractions
+  (let [file (java.io.File/createTempFile "alida-deterministic-thresholds" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+  deterministic_thresholds:
+    max_removed_percentage: 30.0
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"percentage thresholds must be fractions"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest deterministic-threshold-counts-are-non-negative
+  (let [file (java.io.File/createTempFile "alida-deterministic-threshold-counts" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+  deterministic_thresholds:
+    max_removed_absolute: -1
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"max_removed_absolute"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
 (deftest language-config-loads-for-index-and-source
   (let [file (java.io.File/createTempFile "alida-language-config" ".yml")]
     (try

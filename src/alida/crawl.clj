@@ -9,6 +9,7 @@
             [alida.run :as run]
             [alida.source :as source]
             [alida.vector.pgvector :as pgvector]
+            [alida.verify :as verify]
             [clojure.string :as str]
             [com.climate.claypoole :as cp]
             [next.jdbc :as jdbc]))
@@ -289,12 +290,13 @@
       (persist-source! tx run index-cfg structural-config-hash source-result))))
 
 (defn- crawl-summary
-  [run source-results embedding-stats phase-stats run-diff]
+  [run source-results embedding-stats phase-stats run-diff deterministic-verification]
   {:run_id (:id run)
    :index_name (:index_name run)
    :lifecycle_status (:lifecycle_status run)
    :verification_verdict (:verification_verdict run)
    :diff run-diff
+   :deterministic_verification deterministic-verification
    :source_count (count source-results)
    :document_count (reduce + 0 (map :document_count source-results))
    :chunk_count (reduce + 0 (map :chunk_count source-results))
@@ -365,7 +367,24 @@
                                {:metadata {:embedding_stats stats
                                            :phase_stats phase-stats}})
                     run-diff (compute-and-save-diff! ds completed)
-                    summary (crawl-summary completed source-results stats phase-stats run-diff)]
+                    partial-summary (crawl-summary completed source-results stats phase-stats run-diff nil)
+                    deterministic-verification (verify/deterministic-gate
+                                                (:verification (:alida/config sys))
+                                                partial-summary
+                                                run-diff)
+                    _ (db/save-deterministic-verification!
+                       ds
+                       (:id run)
+                       (assoc deterministic-verification
+                              :provider "deterministic"
+                              :model (or (get-in sys [:alida/config :verification :deterministic_gate_version])
+                                         "deterministic-gate")))
+                    summary (crawl-summary completed
+                                           source-results
+                                           stats
+                                           phase-stats
+                                           run-diff
+                                           deterministic-verification)]
                 (db/save-report! ds (:id run) (report/build summary))
                 summary)))
           (catch Exception e

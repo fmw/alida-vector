@@ -235,6 +235,7 @@
                        (let [summary (crawl/crawl-index! sys ds test-index)]
                          {:summary summary
                           :run (db/get-run ds (:run_id summary))
+                          :verification (db/get-verification ds (:run_id summary))
                           :report (db/get-report ds (:run_id summary))
                           :sources (jdbc/execute!
                                     ds
@@ -262,6 +263,9 @@
       (testing "candidate crawl persists run content"
         (is (= "complete" (get-in result [:run :lifecycle_status])))
         (is (nil? (get-in result [:run :verification_verdict])))
+        (is (= "pass" (get-in result [:verification :deterministic_verdict])))
+        (is (nil? (get-in result [:verification :llm_verdict])))
+        (is (nil? (get-in result [:verification :final_verdict])))
         (is (str/includes? (get-in result [:report :slack_summary])
                            "support-knowledge-base run"))
         (is (str/includes? (get-in result [:report :full_report])

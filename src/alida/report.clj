@@ -9,13 +9,17 @@
   [summary]
   (or (:verification_verdict summary) "-"))
 
+(defn- deterministic-verdict
+  [summary]
+  (or (get-in summary [:deterministic_verification :deterministic_verdict]) "-"))
+
 (defn- diff-count
   [summary k]
   (get-in summary [:diff :summary k] 0))
 
 (defn slack-summary
   [{:keys [run_id index_name document_count chunk_count error_count embedding_stats phase_stats] :as summary}]
-  (format "%s run %s: documents=%s, chunks=%s, errors=%s, added=%s, removed=%s, changed=%s, moved=%s, reused=%s, embedded=%s, crawl_ms=%s, verdict=%s"
+  (format "%s run %s: documents=%s, chunks=%s, errors=%s, added=%s, removed=%s, changed=%s, moved=%s, reused=%s, embedded=%s, crawl_ms=%s, deterministic=%s, verdict=%s"
           index_name
           run_id
           (value document_count)
@@ -28,6 +32,7 @@
           (value (:reused_chunk_count embedding_stats))
           (value (:embedded_chunk_count embedding_stats))
           (value (:crawl_duration_ms phase_stats))
+          (deterministic-verdict summary)
           (verdict summary)))
 
 (defn- source-line
@@ -68,9 +73,13 @@
        " -> "
        (:current_canonical_url entry)))
 
+(defn- deterministic-finding-line
+  [entry]
+  (str "- " (:check entry) " " (:verdict entry) ": " (:message entry)))
+
 (defn full-report
   [{:keys [run_id index_name lifecycle_status source_count document_count chunk_count error_count
-           embedding_stats phase_stats sources diff]
+           embedding_stats phase_stats sources diff deterministic_verification]
     :as summary}]
   (str/join
    "\n\n"
@@ -85,6 +94,13 @@
               (str "Documents: " (value document_count))
               (str "Chunks: " (value chunk_count))
               (str "Errors: " (value error_count))])
+            (str/join
+             \newline
+             ["Deterministic Gate"
+              (str "verdict: " (deterministic-verdict summary))])
+            (section "Deterministic Findings"
+                     (map deterministic-finding-line
+                          (:deterministic_findings deterministic_verification)))
             (str/join
              \newline
              ["Diff"
