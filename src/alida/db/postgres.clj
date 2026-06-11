@@ -297,7 +297,21 @@
   [connectable value]
   (jdbc/execute-one!
    connectable
-   ["SELECT * FROM alida_runs WHERE id = ?" (run-id value)]
+   ["SELECT *, metadata->>'embedding_fingerprint' AS embedding_fingerprint
+     FROM alida_runs
+     WHERE id = ?"
+    (run-id value)]
+   jdbc-opts))
+
+(defn get-live-run
+  [connectable index-name]
+  (jdbc/execute-one!
+   connectable
+   ["SELECT r.*, r.metadata->>'embedding_fingerprint' AS embedding_fingerprint
+     FROM alida_indexes i
+     JOIN alida_runs r ON r.id = i.live_run_id
+     WHERE i.name = ?"
+    index-name]
    jdbc-opts))
 
 (defn update-run-status!

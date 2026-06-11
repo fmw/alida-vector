@@ -7,7 +7,6 @@
             [alida.report :as report]
             [alida.run :as run]
             [alida.source :as source]
-            [alida.text :as text]
             [alida.vector.pgvector :as pgvector]
             [clojure.string :as str]
             [com.climate.claypoole :as cp]
@@ -184,20 +183,6 @@
   [index-cfg]
   (get-in index-cfg [:embedding :embedding_dimensions]))
 
-(defn- embedding-fingerprint
-  [index-cfg]
-  (-> (:embedding index-cfg)
-      (select-keys [:provider
-                    :model
-                    :deployment_name
-                    :endpoint
-                    :api_version
-                    :project
-                    :location
-                    :embedding_dimensions])
-      pr-str
-      text/sha-256))
-
 (defn- all-chunks
   [source-results]
   (vec (for [source-result source-results
@@ -221,7 +206,7 @@
   [sys ds index-cfg source-results]
   (let [started (now-ns)
         chunks (all-chunks source-results)
-        fingerprint (embedding-fingerprint index-cfg)
+        fingerprint (embed/fingerprint (:embedding index-cfg))
         reuse-started (now-ns)
         reusable-by-hash (db/reusable-embeddings ds
                                                  (embedding-dimensions index-cfg)
@@ -342,7 +327,7 @@
             run (db/create-run! ds
                                 index-cfg
                                 structural-config-hash
-                                {:embedding_fingerprint (embedding-fingerprint index-cfg)})]
+                                {:embedding_fingerprint (embed/fingerprint (:embedding index-cfg))})]
         (try
           (db/update-run-status! ds (:id run) "crawling")
           (let [crawl-started (now-ns)

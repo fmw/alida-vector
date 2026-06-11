@@ -114,7 +114,8 @@
                  (fn [db-config _ds]
                    (db/migrate! {:database db-config})
                    (with-open [ds (db/datasource db-config)]
-                     (let [run-1 (db/create-run! ds index-cfg "hash-1")
+                     (let [embedding-metadata {:embedding_fingerprint (embed/fingerprint (:embedding index-cfg))}
+                           run-1 (db/create-run! ds index-cfg "hash-1" embedding-metadata)
                            run-2 (db/create-run! ds index-cfg "hash-1")
                            run-3 (db/create-run! ds index-cfg "hash-1")]
                        (db/update-run-status! ds (:id run-1) "complete" {:verification_verdict "pass"})
