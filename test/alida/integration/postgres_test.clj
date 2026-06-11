@@ -550,6 +550,42 @@
         (is (nil? (:prunable-report result)))
         (is (= 1 (:events result)))))))
 
+(deftest ^:integration prune-can-remove-runs-referenced-by-diff-previous-run
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (let [referenced-run (db/create-run! ds index-cfg "hash-1")
+                         diff-run (db/create-run! ds index-cfg "hash-1")
+                         live-run (db/create-run! ds index-cfg "hash-1")
+                         previous-live-run (db/create-run! ds index-cfg "hash-1")]
+                     (db/update-run-status! ds (:id referenced-run) "superseded")
+                     (db/update-run-status! ds (:id diff-run) "complete")
+                     (db/update-run-status! ds (:id live-run) "complete" {:verification_verdict "pass"})
+                     (db/activate-run! ds (:id live-run))
+                     (db/update-run-status! ds (:id previous-live-run) "complete" {:verification_verdict "pass"})
+                     (db/activate-run! ds (:id previous-live-run))
+                     (db/save-run-diff! ds
+                                        (:id diff-run)
+                                        (:id referenced-run)
+                                        {:summary {:changed_count 1}})
+                     (jdbc/execute! ds
+                                    ["UPDATE alida_runs
+                                      SET started_at = now() - interval '90 days'
+                                      WHERE id = ?"
+                                     (:id referenced-run)])
+                     (let [pruned (db/prune-runs! ds
+                                                  {:older-than (.minus (java.time.Instant/now)
+                                                                       (java.time.Duration/ofDays 30))})]
+                       {:pruned pruned
+                        :referenced-run (db/get-run ds (:id referenced-run))
+                        :diff-row (db/get-run-diff ds (:id diff-run))}))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (testing "previous_run_id is nulled when the referenced run is pruned"
+        (is (= 1 (get-in result [:pruned :pruned_count])))
+        (is (nil? (:referenced-run result)))
+        (is (nil? (get-in result [:diff-row :previous_run_id])))))))
+
 (deftest ^:integration advisory-locks-use-held-database-sessions
   (let [result (with-temp-database
                  (fn [db-config _ds]
