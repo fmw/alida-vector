@@ -356,29 +356,28 @@
 
 (defn insert-chunks!
   [connectable embedding-dimensions run source-cfg document-row chunks]
-  (let [table-name (pgvector/dimension-table-name embedding-dimensions)]
-    (doseq [{:keys [chunk_index chunk_count content_hash content embedding estimated_tokens heading_path metadata]} chunks]
-      (jdbc/execute-one!
-       connectable
-       [(format
-         "INSERT INTO %s
-            (run_id, source_id, document_id, chunk_index, chunk_count, content_hash, content,
-             embedding, estimated_tokens, heading_path, metadata)
-          VALUES (?, ?, ?, ?, ?, ?, ?, ?::vector, ?, ?, ?)
-          RETURNING id"
-         table-name)
-        (:id run)
-        (:id source-cfg)
-        (:id document-row)
-        chunk_index
-        chunk_count
-        content_hash
-        content
-        (vector-literal embedding)
-        estimated_tokens
-        (jsonb (or heading_path []))
-        (jsonb (or metadata {}))]
-       jdbc-opts))))
+  (let [table-name (pgvector/dimension-table-name embedding-dimensions)
+        sql (format
+             "INSERT INTO %s
+                (run_id, source_id, document_id, chunk_index, chunk_count, content_hash, content,
+                 embedding, estimated_tokens, heading_path, metadata)
+              VALUES (?, ?, ?, ?, ?, ?, ?, ?::vector, ?, ?, ?)"
+             table-name)
+        param-rows (mapv (fn [{:keys [chunk_index chunk_count content_hash content embedding estimated_tokens heading_path metadata]}]
+                           [(:id run)
+                            (:id source-cfg)
+                            (:id document-row)
+                            chunk_index
+                            chunk_count
+                            content_hash
+                            content
+                            (vector-literal embedding)
+                            estimated_tokens
+                            (jsonb (or heading_path []))
+                            (jsonb (or metadata {}))])
+                         chunks)]
+    (when (seq param-rows)
+      (jdbc/execute-batch! connectable sql param-rows jdbc-opts))))
 
 (defn- droppable-run-partition!
   [connectable embedding-dimensions value]
