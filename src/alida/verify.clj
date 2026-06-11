@@ -85,6 +85,24 @@
                           :error_count error-count
                           :item_count item-count}))))
 
+(defn- check-max-empty-or-short-document-percentage
+  [threshold crawl-summary]
+  (let [document-count (:document_count crawl-summary 0)
+        error-count (:error_count crawl-summary 0)
+        empty-or-short-count (:empty_or_short_document_count crawl-summary 0)
+        item-count (+ document-count error-count)
+        actual (ratio empty-or-short-count item-count)]
+    (when (and (some? threshold)
+               actual
+               (> actual threshold))
+      (threshold-finding :max_empty_or_short_document_percentage
+                         actual
+                         threshold
+                         {:document_count document-count
+                          :error_count error-count
+                          :empty_or_short_document_count empty-or-short-count
+                          :item_count item-count}))))
+
 (defn deterministic-gate
   [{:keys [deterministic_thresholds]} crawl-summary run-diff]
   (let [thresholds deterministic_thresholds
@@ -94,7 +112,10 @@
                              (check-max-removed-percentage (:max_removed_percentage thresholds) diff-summary)
                              (check-max-changed-percentage (:max_changed_percentage thresholds) diff-summary)
                              (check-max-item-failure-percentage (:max_item_failure_percentage thresholds)
-                                                                crawl-summary)]))]
+                                                                crawl-summary)
+                             (check-max-empty-or-short-document-percentage
+                              (:max_empty_or_short_document_percentage thresholds)
+                              crawl-summary)]))]
     {:deterministic_verdict (apply strictest-verdict (map :verdict findings))
      :deterministic_findings findings}))
 
