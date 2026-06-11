@@ -1,0 +1,49 @@
+(ns alida.report-test
+  (:require [alida.report :as report]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is]]))
+
+(def summary
+  {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+   :index_name "docs"
+   :lifecycle_status "complete"
+   :verification_verdict nil
+   :source_count 1
+   :document_count 2
+   :chunk_count 3
+   :error_count 1
+   :embedding_stats {:reused_chunk_count 2
+                     :embedded_chunk_count 1
+                     :embedding_request_count 1
+                     :reuse_lookup_duration_ms 4
+                     :provider_duration_ms 50}
+   :phase_stats {:crawl_duration_ms 100
+                 :fetch_duration_ms 40
+                 :extract_duration_ms 20
+                 :language_duration_ms 5
+                 :chunk_duration_ms 10
+                 :embedding_duration_ms 60
+                 :persist_duration_ms 7}
+   :sources [{:source_cfg {:id "website"
+                           :type "website"}
+              :document_count 2
+              :chunk_count 3
+              :error_count 1
+              :crawl_stats {:fetch_duration_ms 40
+                            :extract_duration_ms 20
+                            :chunk_duration_ms 10}
+              :embedding_stats {:reused_chunk_count 2
+                                :embedded_chunk_count 1}}]})
+
+(deftest builds-slack-summary
+  (let [built (report/build summary)]
+    (is (str/includes? (:slack_summary built) "docs run 018c9099-041d-7f5b-9b65-5b8f08f8e61d"))
+    (is (str/includes? (:slack_summary built) "documents=2"))
+    (is (str/includes? (:slack_summary built) "verdict=-"))))
+
+(deftest builds-full-report
+  (let [full-report (:full_report (report/build summary))]
+    (is (str/includes? full-report "Run: 018c9099-041d-7f5b-9b65-5b8f08f8e61d"))
+    (is (str/includes? full-report "Timings"))
+    (is (str/includes? full-report "Embedding"))
+    (is (str/includes? full-report "- website (website): documents=2"))))

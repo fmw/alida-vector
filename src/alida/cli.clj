@@ -170,9 +170,14 @@
      :message (format-runs runs)}))
 
 (defmethod execute "report"
-  [command sys options arguments]
-  (require-arg arguments "run-id")
-  (not-implemented command sys options arguments))
+  [_ sys _options arguments]
+  (let [run-id (require-arg arguments "run-id")
+        report (with-datasource sys #(db/get-report % run-id))]
+    (if report
+      {:exit-code 0
+       :message (:full_report report)}
+      {:exit-code 1
+       :message (str "No report found for run " run-id ".")})))
 
 (defmethod execute "activate"
   [_ sys options arguments]

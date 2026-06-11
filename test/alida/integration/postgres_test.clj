@@ -181,6 +181,7 @@
                        (let [summary (crawl/crawl-index! sys ds test-index)]
                          {:summary summary
                           :run (db/get-run ds (:run_id summary))
+                          :report (db/get-report ds (:run_id summary))
                           :sources (jdbc/execute!
                                     ds
                                     ["SELECT source_id, source_type, document_count, error_count
@@ -207,6 +208,10 @@
       (testing "candidate crawl persists run content"
         (is (= "complete" (get-in result [:run :lifecycle_status])))
         (is (nil? (get-in result [:run :verification_verdict])))
+        (is (str/includes? (get-in result [:report :slack_summary])
+                           "support-knowledge-base run"))
+        (is (str/includes? (get-in result [:report :full_report])
+                           "Documents: 1"))
         (is (= 1 (get-in result [:summary :document_count])))
         (is (= 1 (get-in result [:summary :chunk_count])))
         (is (= [{:source_id "fixtures"
