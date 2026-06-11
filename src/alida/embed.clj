@@ -1,7 +1,8 @@
 (ns alida.embed
   (:require [clojure.data.json :as json]
             [hato.client :as http])
-  (:import [java.time Instant ZonedDateTime]
+  (:import [java.io IOException]
+           [java.time Instant ZonedDateTime]
            [java.time.format DateTimeFormatter]))
 
 (def default-max-batch-size 96)
@@ -61,6 +62,11 @@
   (or (= 429 status)
       (<= 500 status 599)))
 
+(defn retryable-exception?
+  [e]
+  (or (:retryable (ex-data e))
+      (instance? IOException e)))
+
 (defn- header-value
   [headers k]
   (or (get headers k)
@@ -111,13 +117,12 @@
               (try
                 (f)
                 (catch Exception e
-                  (let [{:keys [retryable]} (ex-data e)]
-                    (if (and retryable (< attempt-number max-retries))
-                      (do
-                        (sleep! sys (retry-delay-ms delay-ms
-                                                    (:retry-after-ms (ex-data e))))
-                        (attempt (inc attempt-number) (* 2 delay-ms)))
-                      (throw e))))))]
+                  (if (and (retryable-exception? e) (< attempt-number max-retries))
+                    (do
+                      (sleep! sys (retry-delay-ms delay-ms
+                                                  (:retry-after-ms (ex-data e))))
+                      (attempt (inc attempt-number) (* 2 delay-ms)))
+                    (throw e)))))]
       (attempt 1 retry-initial-ms))))
 
 (defn batches
