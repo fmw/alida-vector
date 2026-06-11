@@ -13,9 +13,12 @@
             [alida.verify :as verify]
             [clojure.string :as str]
             [com.climate.claypoole :as cp]
-            [next.jdbc :as jdbc]))
+            [next.jdbc :as jdbc])
+  (:import [java.net URI]
+           [java.util.concurrent Callable ExecutorService Future]))
 
 (def default-source-concurrency 20)
+(def default-inter-request-delay-ms 0)
 
 (defn- html-content?
   [content-type]
@@ -100,24 +103,30 @@
                                 :canonical_url (:canonical_url fetched)})})))
 
 (defn- process-discovered
-  [sys index-cfg source-cfg discovered-item]
+  [sys index-cfg source-cfg gate-for-item discovered-item]
   (if (source/anomaly? discovered-item)
     {:error (error-details discovered-item {:source_id (:id source-cfg)})}
-    (let [fetch-started (now-ns)]
-      (try
-        (let [fetched (source/fetch sys source-cfg discovered-item)
-              fetch-duration-ms (elapsed-ms fetch-started)]
-        (if (source/anomaly? fetched)
-          {:error (error-details fetched {:source_id (:id source-cfg)
-                                          :canonical_url (:canonical_url discovered-item)})
-           :crawl_stats {:fetch_duration_ms fetch-duration-ms}}
-          (update (process-fetched index-cfg source-cfg fetched)
-                  :crawl_stats
-                  #(merge-with + {:fetch_duration_ms fetch-duration-ms} (or % {})))))
-        (catch Exception e
-          {:error (error-details e {:source_id (:id source-cfg)
-                                    :canonical_url (:canonical_url discovered-item)})
-           :crawl_stats {:fetch_duration_ms (elapsed-ms fetch-started)}})))))
+    (try
+      (when-let [fetch-gate (gate-for-item discovered-item)]
+        (fetch-gate))
+      (let [fetch-started (now-ns)]
+        (try
+          (let [fetched (source/fetch sys source-cfg discovered-item)
+                fetch-duration-ms (elapsed-ms fetch-started)]
+            (if (source/anomaly? fetched)
+              {:error (error-details fetched {:source_id (:id source-cfg)
+                                              :canonical_url (:canonical_url discovered-item)})
+               :crawl_stats {:fetch_duration_ms fetch-duration-ms}}
+              (update (process-fetched index-cfg source-cfg fetched)
+                      :crawl_stats
+                      #(merge-with + {:fetch_duration_ms fetch-duration-ms} (or % {})))))
+          (catch Exception e
+            {:error (error-details e {:source_id (:id source-cfg)
+                                      :canonical_url (:canonical_url discovered-item)})
+             :crawl_stats {:fetch_duration_ms (elapsed-ms fetch-started)}})))
+      (catch Exception e
+        {:error (error-details e {:source_id (:id source-cfg)
+                                  :canonical_url (:canonical_url discovered-item)})}))))
 
 (defn- dedupe-discovered
   [discovered]
@@ -141,18 +150,96 @@
   (or (:max_concurrency source-cfg)
       default-source-concurrency))
 
+(defn- source-inter-request-delay-ms
+  [source-cfg]
+  (or (:inter_request_delay_ms source-cfg)
+      default-inter-request-delay-ms))
+
+(defn- clock-ms
+  [sys]
+  (if-let [clock-fn (:alida/clock-ms sys)]
+    (clock-fn)
+    (System/currentTimeMillis)))
+
+(defn- wait-on-lock!
+  [sys lock millis]
+  (if-let [wait-fn (:alida/wait-on-lock sys)]
+    (wait-fn lock millis)
+    (.wait lock (long millis))))
+
+(defn- request-gate
+  [sys delay-ms]
+  (when (pos? delay-ms)
+    (let [lock (Object.)
+          previous-start-ms (atom nil)]
+      (fn []
+        (locking lock
+          (loop []
+            (let [now-ms (clock-ms sys)
+                  next-start-ms (some-> @previous-start-ms (+ delay-ms))
+                  wait-ms (when next-start-ms
+                            (- next-start-ms now-ms))]
+              (if (and wait-ms (pos? wait-ms))
+                (do
+                  (wait-on-lock! sys lock wait-ms)
+                  (recur))
+                (reset! previous-start-ms now-ms)))))))))
+
+(defn- uri-host
+  [value]
+  (try
+    (let [uri (URI. value)
+          scheme (some-> (.getScheme uri) str/lower-case)
+          host (some-> (.getHost uri) str/lower-case)]
+      (when (and (#{"http" "https"} scheme) (seq host))
+        host))
+    (catch Exception _
+      nil)))
+
+(defn- gate-key
+  [source-cfg discovered-item]
+  (or (some-> (:canonical_url discovered-item) uri-host)
+      (str "source:" (:id source-cfg))))
+
+(defn- request-gates
+  [sys source-cfg delay-ms discovered-items]
+  (if (pos? delay-ms)
+    (let [keys (into #{}
+                     (keep #(when-not (source/anomaly? %)
+                              (gate-key source-cfg %)))
+                     discovered-items)
+          gates (zipmap keys (repeatedly #(request-gate sys delay-ms)))]
+      #(get gates (gate-key source-cfg %)))
+    (constantly nil)))
+
+(defn- submit-task!
+  [pool f]
+  (.submit ^ExecutorService pool
+           ^Callable (reify Callable
+                       (call [_] (f)))))
+
+(defn- task-result
+  [task]
+  (.get ^Future task))
+
 (defn- process-discovered-items
   [sys index-cfg source-cfg discovered-items]
-  (let [concurrency (source-concurrency source-cfg)]
+  (let [concurrency (source-concurrency source-cfg)
+        delay-ms (source-inter-request-delay-ms source-cfg)
+        gate-for-item (request-gates sys source-cfg delay-ms discovered-items)]
     (if (<= concurrency 1)
-      (mapv #(process-discovered sys index-cfg source-cfg %) discovered-items)
+      (mapv #(process-discovered sys index-cfg source-cfg gate-for-item %) discovered-items)
       (let [pool (cp/threadpool concurrency :name "alida-crawl")]
         (try
-          (vec (cp/pmap pool
-                        #(process-discovered sys index-cfg source-cfg %)
-                        discovered-items))
+          (let [tasks (mapv #(submit-task!
+                               pool
+                               (fn []
+                                 (process-discovered sys index-cfg source-cfg gate-for-item %)))
+                            discovered-items)]
+            (mapv task-result tasks))
           (finally
-            (cp/shutdown! pool)))))))
+            (cp/shutdown! pool)
+            nil))))))
 
 (defn process-source
   [sys index-cfg source-cfg]
@@ -172,7 +259,8 @@
                                 {:source_duration_ms (elapsed-ms source-started)
                                  :discover_duration_ms discover-duration-ms
                                  :processing_duration_ms processing-duration-ms
-                                 :max_concurrency (source-concurrency source-cfg)}
+                                 :max_concurrency (source-concurrency source-cfg)
+                                 :inter_request_delay_ms (source-inter-request-delay-ms source-cfg)}
                                 item-stats)]
     {:source_cfg source-cfg
      :discovered_count (count discovered)

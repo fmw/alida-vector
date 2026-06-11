@@ -61,6 +61,7 @@
    [:denied_urls {:optional true} [:sequential :string]]
    [:denied_url_prefixes {:optional true} [:sequential :string]]
    [:max_concurrency {:optional true} :int]
+   [:inter_request_delay_ms {:optional true} :int]
    [:max_sitemap_depth {:optional true} :int]])
 
 (def Verification

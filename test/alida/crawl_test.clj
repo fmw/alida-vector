@@ -4,7 +4,8 @@
             [alida.source :as source]
             [alida.source.local]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is]]))
+            [clojure.test :refer [deftest is]])
+  (:import [java.util.concurrent TimeUnit]))
 
 (defn- temp-file
   [suffix body]
@@ -154,6 +155,128 @@
         (is (= 2 @max-active))
         (is (= 2 (get-in result [:crawl_stats :max_concurrency])))
         (is (pos-int? (get-in result [:crawl_stats :fetch_duration_ms])))))))
+
+(deftest request-gate-waits-until-delay-after-previous-start
+  (let [current-ms (atom 1000)
+        waits (atom [])
+        gate (#'crawl/request-gate
+              {:alida/clock-ms #(deref current-ms)
+               :alida/wait-on-lock (fn [_ millis]
+                                     (swap! waits conj millis)
+                                     (swap! current-ms + millis))}
+              100)]
+    (gate)
+    (swap! current-ms + 25)
+    (gate)
+    (swap! current-ms + 10)
+    (gate)
+    (is (= [75 90] @waits))))
+
+(deftest process-source-gates-fetches-with-inter-request-delay
+  (let [items (mapv (fn [i]
+                      {:source_id "fixtures"
+                       :source_type "local"
+                       :canonical_url (str "https://example.test/" i)
+                       :content_type "text/html"})
+                    (range 3))
+        current-ms (atom 1000)
+        waits (atom [])
+        events (atom [])]
+    (with-redefs [source/discover (fn [_ _] items)
+                  source/fetch (fn [_ _ item]
+                                 (swap! events conj [:fetch (:canonical_url item) @current-ms])
+                                 (assoc item
+                                        :body "<html lang=\"en\"><body><h1>Hello</h1><p>This document can be processed.</p></body></html>"))]
+      (let [result (crawl/process-source
+                    {:alida/clock-ms #(deref current-ms)
+                     :alida/wait-on-lock (fn [_ millis]
+                                           (swap! waits conj millis)
+                                           (swap! current-ms + millis))}
+                    index-cfg
+                    {:id "fixtures"
+                     :type "local"
+                     :max_concurrency 2
+                     :inter_request_delay_ms 25})]
+        (is (= 3 (:document_count result)))
+        (is (= [25 25] @waits))
+        (is (= [1000 1025 1050] (sort (mapv #(nth % 2) @events))))
+        (is (= 25 (get-in result [:crawl_stats :inter_request_delay_ms])))))))
+
+(deftest process-source-gates-fetches-per-hostname
+  (let [items [{:source_id "fixtures"
+                :source_type "local"
+                :canonical_url "https://a.example.test/1"
+                :content_type "text/html"}
+               {:source_id "fixtures"
+                :source_type "local"
+                :canonical_url "https://b.example.test/1"
+                :content_type "text/html"}
+               {:source_id "fixtures"
+                :source_type "local"
+                :canonical_url "https://a.example.test/2"
+                :content_type "text/html"}
+               {:source_id "fixtures"
+                :source_type "local"
+                :canonical_url "https://b.example.test/2"
+                :content_type "text/html"}]
+        current-ms (atom 1000)
+        waits (atom [])
+        events (atom [])]
+    (with-redefs [source/discover (fn [_ _] items)
+                  source/fetch (fn [_ _ item]
+                                 (swap! events conj [(:canonical_url item) @current-ms])
+                                 (assoc item
+                                        :body "<html lang=\"en\"><body><h1>Hello</h1><p>This document can be processed.</p></body></html>"))]
+      (let [result (crawl/process-source
+                    {:alida/clock-ms #(deref current-ms)
+                     :alida/wait-on-lock (fn [_ millis]
+                                           (swap! waits conj millis)
+                                           (swap! current-ms + millis))}
+                    index-cfg
+                    {:id "fixtures"
+                     :type "local"
+                     :max_concurrency 1
+                     :inter_request_delay_ms 25})]
+        (is (= 4 (:document_count result)))
+        (is (= [25] @waits))
+        (is (= [["https://a.example.test/1" 1000]
+                ["https://b.example.test/1" 1000]
+                ["https://a.example.test/2" 1025]
+                ["https://b.example.test/2" 1025]]
+               @events))))))
+
+(deftest parallel-process-source-subprocess-exits
+  (let [expr "(require '[alida.crawl :as crawl] '[alida.source :as source])
+              (let [item {:source_id \"fixtures\"
+                          :source_type \"local\"
+                          :canonical_url \"https://example.test/1\"
+                          :content_type \"text/html\"}]
+                (with-redefs [source/discover (fn [_ _] [item item])
+                              source/fetch (fn [_ _ item]
+                                             (assoc item
+                                                    :body \"<html lang=\\\"en\\\"><body><h1>Hello</h1><p>This document can be processed.</p></body></html>\"))]
+                  (crawl/process-source
+                   {}
+                   {:name \"docs\"
+                    :languages {:allowed [\"en\"] :fallback \"en\"}
+                    :chunking {:max_tokens 24}}
+                   {:id \"fixtures\"
+                    :type \"local\"
+                    :max_concurrency 2})
+                  (println \"done\")))"
+        process (-> (ProcessBuilder. ["clojure" "-M" "-e" expr])
+                    (doto
+                      (.directory (java.io.File. (System/getProperty "user.dir")))
+                      (.redirectErrorStream true))
+                    .start)
+        exited? (.waitFor process 8 TimeUnit/SECONDS)
+        output (slurp (.getInputStream process))]
+    (when-not exited?
+      (.destroyForcibly process))
+    (is exited? output)
+    (when exited?
+      (is (zero? (.exitValue process)) output)
+      (is (str/includes? output "done") output))))
 
 (deftest crawl-continues-with-other-indexes-after-one-index-fails
   (let [sys {:alida/config {:indexes [{:name "broken"} {:name "ok"}]}}
