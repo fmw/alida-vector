@@ -69,6 +69,30 @@
   [dimensions]
   (vec (repeat dimensions 0.0)))
 
+(defn- insert-searchable-chunk!
+  [ds run-id content]
+  (pgvector/ensure-run-partition! ds 1536 run-id)
+  (jdbc/execute!
+   ds
+   [(str
+     "WITH doc AS (
+        INSERT INTO alida_documents
+          (run_id, source_id, canonical_url, normalized_content_hash)
+        VALUES (?, 'support', ?, ?)
+        RETURNING id
+      )
+      INSERT INTO alida_chunks_1536
+        (run_id, source_id, document_id, chunk_index, chunk_count, content_hash, content, embedding, estimated_tokens)
+      SELECT ?, 'support', id, 0, 1, ?, ?, "
+     (first-axis-vector-sql 1536)
+     ", 2 FROM doc")
+    run-id
+    (str "https://example.test/" run-id)
+    (str "doc-hash-" run-id)
+    run-id
+    (str "chunk-hash-" run-id)
+    content]))
+
 (defn- temp-file
   [suffix body]
   (let [file (java.io.File/createTempFile "alida-integration" suffix)]
@@ -406,6 +430,67 @@
                (get-in result [:reject-live :pointer])))
         (is (= :previous-live-run
                (get-in result [:reject-previous-live :pointer])))))))
+
+(deftest ^:integration prune-removes-eligible-runs-and-keeps-protected-runs
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (let [previous-live (db/create-run! ds index-cfg "hash-1")
+                         current-live (db/create-run! ds index-cfg "hash-1")
+                         prunable (db/create-run! ds index-cfg "hash-1")
+                         recent (db/create-run! ds index-cfg "hash-1")]
+                     (doseq [run [previous-live current-live prunable recent]]
+                       (insert-searchable-chunk! ds (:id run) (str "Content " (:id run)))
+                       (db/save-report! ds (:id run) {:slack_summary "summary"
+                                                      :full_report "full"}))
+                     (db/update-run-status! ds (:id previous-live) "complete" {:verification_verdict "pass"})
+                     (db/activate-run! ds (:id previous-live))
+                     (db/update-run-status! ds (:id current-live) "complete" {:verification_verdict "pass"})
+                     (db/activate-run! ds (:id current-live))
+                     (db/update-run-status! ds (:id prunable) "error")
+                     (db/update-run-status! ds (:id recent) "error")
+                     (jdbc/execute! ds
+                                    ["UPDATE alida_runs
+                                      SET started_at = now() - interval '90 days'
+                                      WHERE id IN (?, ?, ?)"
+                                     (:id previous-live)
+                                     (:id current-live)
+                                     (:id prunable)])
+                     (let [pruned (db/prune-runs! ds
+                                                  {:older-than (.minus (java.time.Instant/now)
+                                                                       (java.time.Duration/ofDays 30))})
+                           partition-name (pgvector/run-partition-name 1536 (:id prunable))]
+                       {:pruned pruned
+                        :previous-live (db/get-run ds (:id previous-live))
+                        :current-live (db/get-run ds (:id current-live))
+                        :prunable (db/get-run ds (:id prunable))
+                        :recent (db/get-run ds (:id recent))
+                        :prunable-partition (:partition
+                                             (jdbc/execute-one!
+                                              ds
+                                              ["SELECT to_regclass(?)::text AS partition" partition-name]
+                                              db/jdbc-opts))
+                        :prunable-report (db/get-report ds (:id prunable))
+                        :events (:n (jdbc/execute-one!
+                                     ds
+                                     ["SELECT count(*) AS n
+                                       FROM alida_events
+                                       WHERE event_type = 'run-pruned'
+                                         AND details->>'run_id' = ?"
+                                      (str (:id prunable))]
+                                     db/jdbc-opts))}))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (testing "manual pruning only removes eligible runs"
+        (is (= 1 (get-in result [:pruned :pruned_count])))
+        (is (= "error" (-> result :pruned :pruned first :lifecycle_status)))
+        (is (some? (:previous-live result)))
+        (is (some? (:current-live result)))
+        (is (nil? (:prunable result)))
+        (is (some? (:recent result)))
+        (is (nil? (:prunable-partition result)))
+        (is (nil? (:prunable-report result)))
+        (is (= 1 (:events result)))))))
 
 (deftest ^:integration advisory-locks-use-held-database-sessions
   (let [result (with-temp-database

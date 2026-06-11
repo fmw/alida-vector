@@ -5,7 +5,8 @@
             [alida.search :as search]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
-            [integrant.core :as ig]))
+            [integrant.core :as ig])
+  (:import [java.time Instant]))
 
 (def test-system
   {:alida/config {:database {:jdbc_url "jdbc:postgresql://example/alida"}}})
@@ -178,6 +179,24 @@
           (is (= 0 (:exit-code result)))
           (is (= "No results found." (:message result))))))))
 
+(deftest prune-command-calls-db-layer
+  (with-system-stub
+    (fn []
+      (with-redefs [db/datasource (fn [_]
+                                    (reify java.io.Closeable
+                                      (close [_] nil)))
+                    db/prune-runs! (fn [_ opts]
+                                     (is (= 2 (:keep-last opts)))
+                                     (is (instance? Instant (:older-than opts)))
+                                     {:pruned [{:id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                                                :index_name "docs"
+                                                :lifecycle_status "error"
+                                                :partition "alida_chunks_1536_run_018c9099041d7f5b9b655b8f08f8e61d"}]})]
+        (let [result (cli/run ["prune" "--config" "ignored.yml" "--keep-last" "2" "--older-than" "30d"])]
+          (is (= 0 (:exit-code result)))
+          (is (str/includes? (:message result) "Pruned 1 runs."))
+          (is (str/includes? (:message result) "018c9099-041d-7f5b-9b65-5b8f08f8e61d")))))))
+
 (deftest migrate-command-calls-db-layer
   (with-system-stub
     (fn []
@@ -224,9 +243,12 @@
           (is (str/includes? (:message result) "0 succeeded, 1 failed"))
           (is (str/includes? (:message result) "docs  failed: boom")))))))
 
-(deftest stubbed-commands-validate-arguments-before-returning-not-implemented
+(deftest prune-command-requires-explicit-criteria
   (with-system-stub
     (fn []
-      (let [result (cli/run ["prune"])]
-        (is (= 2 (:exit-code result)))
-        (is (= "Command 'prune' is wired but not implemented yet." (:message result)))))))
+      (with-redefs [db/datasource (fn [_]
+                                    (reify java.io.Closeable
+                                      (close [_] nil)))]
+        (let [result (cli/run ["prune" "--config" "ignored.yml"])]
+          (is (= 1 (:exit-code result)))
+          (is (= "Prune requires --keep-last or --older-than" (:message result))))))))
