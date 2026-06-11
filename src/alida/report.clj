@@ -9,14 +9,22 @@
   [summary]
   (or (:verification_verdict summary) "-"))
 
+(defn- diff-count
+  [summary k]
+  (get-in summary [:diff :summary k] 0))
+
 (defn slack-summary
   [{:keys [run_id index_name document_count chunk_count error_count embedding_stats phase_stats] :as summary}]
-  (format "%s run %s: documents=%s, chunks=%s, errors=%s, reused=%s, embedded=%s, crawl_ms=%s, verdict=%s"
+  (format "%s run %s: documents=%s, chunks=%s, errors=%s, added=%s, removed=%s, changed=%s, moved=%s, reused=%s, embedded=%s, crawl_ms=%s, verdict=%s"
           index_name
           run_id
           (value document_count)
           (value chunk_count)
           (value error_count)
+          (diff-count summary :added_count)
+          (diff-count summary :removed_count)
+          (diff-count summary :changed_count)
+          (diff-count summary :moved_count)
           (value (:reused_chunk_count embedding_stats))
           (value (:embedded_chunk_count embedding_stats))
           (value (:crawl_duration_ms phase_stats))
@@ -41,9 +49,28 @@
   (when (seq lines)
     (str/join \newline (cons title lines))))
 
+(defn- url-line
+  [entry]
+  (str "- " (:source_id entry) " " (:canonical_url entry)))
+
+(defn- changed-line
+  [entry]
+  (str "- " (:source_id entry) " " (:canonical_url entry)
+       " "
+       (:previous_normalized_content_hash entry)
+       " -> "
+       (:current_normalized_content_hash entry)))
+
+(defn- moved-line
+  [entry]
+  (str "- " (:source_id entry) " "
+       (:previous_canonical_url entry)
+       " -> "
+       (:current_canonical_url entry)))
+
 (defn full-report
   [{:keys [run_id index_name lifecycle_status source_count document_count chunk_count error_count
-           embedding_stats phase_stats sources]
+           embedding_stats phase_stats sources diff]
     :as summary}]
   (str/join
    "\n\n"
@@ -58,6 +85,18 @@
               (str "Documents: " (value document_count))
               (str "Chunks: " (value chunk_count))
               (str "Errors: " (value error_count))])
+            (str/join
+             \newline
+             ["Diff"
+              (str "previous_run_id: " (or (:previous_run_id diff) "-"))
+              (str "added: " (diff-count summary :added_count))
+              (str "removed: " (diff-count summary :removed_count))
+              (str "changed: " (diff-count summary :changed_count))
+              (str "moved: " (diff-count summary :moved_count))])
+            (section "Added URLs" (map url-line (:added_urls diff)))
+            (section "Removed URLs" (map url-line (:removed_urls diff)))
+            (section "Changed URLs" (map changed-line (:changed_urls diff)))
+            (section "Moved URLs" (map moved-line (:moved_urls diff)))
             (str/join
              \newline
              ["Timings"

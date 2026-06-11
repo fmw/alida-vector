@@ -1,6 +1,7 @@
 (ns alida.crawl
   (:require [alida.chunk :as chunk]
             [alida.db.postgres :as db]
+            [alida.diff :as diff]
             [alida.embed :as embed]
             [alida.extract.html :as html]
             [alida.lang :as lang]
@@ -288,11 +289,12 @@
       (persist-source! tx run index-cfg structural-config-hash source-result))))
 
 (defn- crawl-summary
-  [run source-results embedding-stats phase-stats]
+  [run source-results embedding-stats phase-stats run-diff]
   {:run_id (:id run)
    :index_name (:index_name run)
    :lifecycle_status (:lifecycle_status run)
    :verification_verdict (:verification_verdict run)
+   :diff run-diff
    :source_count (count source-results)
    :document_count (reduce + 0 (map :document_count source-results))
    :chunk_count (reduce + 0 (map :chunk_count source-results))
@@ -316,6 +318,17 @@
                            "error"
                            {:error_summary (or (ex-message e) (str e))}))
   e)
+
+(defn- compute-and-save-diff!
+  [ds run]
+  (let [previous-run (db/get-live-run ds (:index_name run))
+        previous-documents (if previous-run
+                             (db/list-run-documents ds (:id previous-run))
+                             [])
+        current-documents (db/list-run-documents ds (:id run))
+        run-diff (diff/compute previous-documents current-documents)]
+    (db/save-run-diff! ds (:id run) (:id previous-run) run-diff)
+    (assoc run-diff :previous_run_id (:id previous-run))))
 
 (defn crawl-index!
   [sys ds index-cfg]
@@ -351,7 +364,8 @@
                                "complete"
                                {:metadata {:embedding_stats stats
                                            :phase_stats phase-stats}})
-                    summary (crawl-summary completed source-results stats phase-stats)]
+                    run-diff (compute-and-save-diff! ds completed)
+                    summary (crawl-summary completed source-results stats phase-stats run-diff)]
                 (db/save-report! ds (:id run) (report/build summary))
                 summary)))
           (catch Exception e

@@ -87,7 +87,7 @@ CREATE INDEX alida_documents_normalized_hash_idx
 
 CREATE TABLE alida_run_diffs (
   run_id uuid PRIMARY KEY REFERENCES alida_runs(id) ON DELETE CASCADE,
-  previous_run_id uuid REFERENCES alida_runs(id),
+  previous_run_id uuid REFERENCES alida_runs(id) ON DELETE SET NULL,
   summary jsonb NOT NULL DEFAULT '{}'::jsonb,
   added_urls jsonb NOT NULL DEFAULT '[]'::jsonb,
   removed_urls jsonb NOT NULL DEFAULT '[]'::jsonb,

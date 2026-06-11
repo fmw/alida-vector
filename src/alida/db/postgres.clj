@@ -214,6 +214,53 @@
             :language_confidence (:language_confidence document)})]
    jdbc-opts))
 
+(defn list-run-documents
+  [connectable value]
+  (jdbc/execute!
+   connectable
+   ["SELECT source_id, canonical_url, title, locale, normalized_content_hash, raw_content_hash, metadata
+     FROM alida_documents
+     WHERE run_id = ?
+     ORDER BY source_id, canonical_url"
+    (run-id value)]
+   jdbc-opts))
+
+(defn save-run-diff!
+  [connectable value previous-run-id {:keys [summary added_urls removed_urls changed_urls moved_urls
+                                             heuristic_security_findings]}]
+  (jdbc/execute-one!
+   connectable
+   ["INSERT INTO alida_run_diffs
+       (run_id, previous_run_id, summary, added_urls, removed_urls, changed_urls, moved_urls,
+        heuristic_security_findings)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (run_id) DO UPDATE
+     SET previous_run_id = EXCLUDED.previous_run_id,
+         summary = EXCLUDED.summary,
+         added_urls = EXCLUDED.added_urls,
+         removed_urls = EXCLUDED.removed_urls,
+         changed_urls = EXCLUDED.changed_urls,
+         moved_urls = EXCLUDED.moved_urls,
+         heuristic_security_findings = EXCLUDED.heuristic_security_findings,
+         created_at = now()
+     RETURNING *"
+    (run-id value)
+    (run-id previous-run-id)
+    (jsonb (or summary {}))
+    (jsonb (or added_urls []))
+    (jsonb (or removed_urls []))
+    (jsonb (or changed_urls []))
+    (jsonb (or moved_urls []))
+    (jsonb (or heuristic_security_findings []))]
+   jdbc-opts))
+
+(defn get-run-diff
+  [connectable value]
+  (jdbc/execute-one!
+   connectable
+   ["SELECT * FROM alida_run_diffs WHERE run_id = ?" (run-id value)]
+   jdbc-opts))
+
 (defn- vector-literal
   [embedding]
   (if (string? embedding)
