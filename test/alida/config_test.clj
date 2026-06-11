@@ -722,6 +722,7 @@ indexes:
         denied_urls: [https://example.test/docs/secret]
         denied_url_prefixes: [https://example.test/private/]
         max_concurrency: 7
+        max_sitemap_depth: 5
 ")
       (let [index (-> (config/load-config (.getPath file)) :indexes first)
             sources (:sources index)]
@@ -731,6 +732,40 @@ indexes:
         (is (= ["html" "md"] (-> sources first :include_extensions)))
         (is (= ["https://example.test/docs/"] (-> sources second :allowed_url_prefixes)))
         (is (= ["https://example.test/docs/secret"] (-> sources second :denied_urls)))
-        (is (= 7 (-> sources second :max_concurrency))))
+        (is (= 7 (-> sources second :max_concurrency)))
+        (is (= 5 (-> sources second :max_sitemap_depth))))
+      (finally
+        (.delete file)))))
+
+(deftest source-sitemap-depth-must-be-positive
+  (let [file (java.io.File/createTempFile "alida-source-sitemap-depth" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+  api_key: test-key
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: website
+        type: website
+        sitemap_url: https://example.test/sitemap.xml
+        max_sitemap_depth: 0
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"max_sitemap_depth must be positive"
+                            (config/load-config (.getPath file))))
       (finally
         (.delete file)))))
