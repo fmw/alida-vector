@@ -12,7 +12,7 @@
    "json" "application/json"})
 
 (def default-extensions
-  (set (keys extension-content-types)))
+  #{"html" "htm"})
 
 (defn- extension
   [path]
@@ -73,7 +73,7 @@
     (let [file (io/file (:path discovered-item))]
       (if (.exists file)
         (assoc discovered-item
-               :body (slurp file)
+               :body (slurp file :encoding "UTF-8")
                :title (or (:title discovered-item) (.getName file)))
         (source/anomaly :cognitect.anomalies/not-found
                         {:type :alida.source.local/file-not-found
