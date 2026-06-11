@@ -160,28 +160,21 @@
   [url]
   (slack-escape (truncate url max-slack-url-length)))
 
-(defn- source-label
-  [entry]
-  (if-let [source-id (:source_id entry)]
-    (str "`" (slack-escape source-id) "` ")
-    ""))
-
 (defn- slack-added-line
   [entry]
-  (str "• ✅ " (source-label entry) (display-url (:canonical_url entry))))
+  (str "• " (display-url (:canonical_url entry))))
 
 (defn- slack-removed-line
   [entry]
-  (str "• 🗑️ " (source-label entry) (display-url (:canonical_url entry))))
+  (str "• " (display-url (:canonical_url entry))))
 
 (defn- slack-changed-line
   [entry]
-  (str "• ✏️ " (source-label entry) (display-url (:canonical_url entry))))
+  (str "• " (display-url (:canonical_url entry))))
 
 (defn- slack-moved-line
   [entry]
-  (str "• 🔀 " (source-label entry)
-       (display-url (:previous_canonical_url entry))
+  (str "• " (display-url (:previous_canonical_url entry))
        " → "
        (display-url (:current_canonical_url entry))))
 
