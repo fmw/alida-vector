@@ -41,6 +41,8 @@ Alida Vector uses an LLM verification step to validate scraped data before a can
 
 Alida Vector is designed to run as a scheduled job, such as a Docker container running on Kubernetes.
 
+For crawl cleanup and extraction tuning, see [Crawl Tuning](docs/tuning.md).
+
 ## Contact
 
 If you're using Alida Vector or have any questions, I'd love to hear from you. You can make a GitHub issue or reach out through fmw@vix.io.

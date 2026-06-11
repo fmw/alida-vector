@@ -29,7 +29,7 @@
 
 (def Embedding
   [:map
-   [:provider [:enum "openai" "azure-openai" "vertex-ai"]]
+   [:provider [:enum "openai" "azure-openai" "vertex-ai" "noop"]]
    [:model {:optional true} :string]
    [:deployment_name {:optional true} :string]
    [:endpoint {:optional true} :string]
@@ -64,7 +64,8 @@
 
 (def Verification
   [:map
-   [:provider [:enum "openai" "azure-openai" "vertex-ai"]]
+   [:enabled {:optional true} :boolean]
+   [:provider {:optional true} [:enum "openai" "azure-openai" "vertex-ai"]]
    [:model {:optional true} :string]
    [:deployment_name {:optional true} :string]
    [:api_key {:optional true} :string]

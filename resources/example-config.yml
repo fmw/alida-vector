@@ -8,6 +8,9 @@ storage:
     type: pgvector
 
 verification:
+  # Defaults to true. Set enabled: false for local crawl/extraction tuning
+  # when you want to avoid LLM API calls. Production refreshes should keep it enabled.
+  enabled: true
   provider: openai
   model: gpt-4.1-mini
   api_key: ${OPENAI_API_KEY}
@@ -36,6 +39,8 @@ indexes:
       api_key: ${OPENAI_API_KEY}
       inter_batch_delay_ms: 250
       retry_jitter_ms: 100
+      # For local crawl/extraction tuning only, use provider: noop with the same
+      # embedding_dimensions. It stores placeholder vectors and cannot be activated.
     chunking:
       max_input_tokens: 8192
       max_tokens: 6550

@@ -345,9 +345,9 @@
     (Timestamp/from instant)))
 
 (defn- require-prune-criteria!
-  [{:keys [keep-last older-than]}]
-  (when-not (or (some? keep-last) (some? older-than))
-    (throw (ex-info "Prune requires --keep-last or --older-than"
+  [{:keys [keep-last older-than disabled-embeddings]}]
+  (when-not (or (some? keep-last) (some? older-than) disabled-embeddings)
+    (throw (ex-info "Prune requires --keep-last, --older-than, or --disabled-embeddings"
                     {:type :alida.db.postgres/prune-requires-criteria})))
   (when (and (some? keep-last) (neg-int? keep-last))
     (throw (ex-info "Prune --keep-last must be zero or greater"
@@ -438,7 +438,10 @@
   [connectable value]
   (jdbc/execute-one!
    connectable
-   ["SELECT *, metadata->>'embedding_fingerprint' AS embedding_fingerprint
+   ["SELECT *,
+            metadata->>'embedding_fingerprint' AS embedding_fingerprint,
+            metadata->>'embedding_provider' AS embedding_provider,
+            COALESCE((metadata->>'embedding_disabled')::boolean, false) AS embedding_disabled
      FROM alida_runs
      WHERE id = ?"
     (run-id value)]
@@ -448,7 +451,10 @@
   [connectable index-name]
   (jdbc/execute-one!
    connectable
-   ["SELECT r.*, r.metadata->>'embedding_fingerprint' AS embedding_fingerprint
+   ["SELECT r.*,
+            r.metadata->>'embedding_fingerprint' AS embedding_fingerprint,
+            r.metadata->>'embedding_provider' AS embedding_provider,
+            COALESCE((r.metadata->>'embedding_disabled')::boolean, false) AS embedding_disabled
      FROM alida_indexes i
      JOIN alida_runs r ON r.id = i.live_run_id
      WHERE i.name = ?"
@@ -512,6 +518,13 @@
                      :lifecycle-status (:lifecycle_status run)
                      :verification-verdict (:verification_verdict run)
                      :reason :not-complete})))
+  (when (:embedding_disabled run)
+    (throw (ex-info (str "Run was created with disabled embeddings and cannot be activated: " (:id run))
+                    {:type :alida.db.postgres/run-not-activatable
+                     :run-id (:id run)
+                     :lifecycle-status (:lifecycle_status run)
+                     :verification-verdict (:verification_verdict run)
+                     :reason :embeddings-disabled})))
   (case (:verification_verdict run)
     "pass" nil
     "caution" (when-not allow-caution?
@@ -594,8 +607,10 @@
    jdbc-opts))
 
 (defn prune-candidate-runs
-  [connectable {:keys [keep-last older-than]}]
-  (require-prune-criteria! {:keep-last keep-last :older-than older-than})
+  [connectable {:keys [keep-last older-than disabled-embeddings]}]
+  (require-prune-criteria! {:keep-last keep-last
+                            :older-than older-than
+                            :disabled-embeddings disabled-embeddings})
   (let [older-than (timestamp older-than)]
     (with-connection
       connectable
@@ -620,12 +635,16 @@
         AND lifecycle_status = ANY(?)
         AND (?::integer IS NULL OR index_rank > ?)
         AND (?::timestamptz IS NULL OR started_at < ?)
+        AND (?::boolean = false
+             OR COALESCE((metadata->>'embedding_disabled')::boolean, false) = true
+             OR metadata->>'embedding_provider' = 'noop')
       ORDER BY index_name, started_at"
           (text-array conn pruneable-lifecycle-statuses)
           keep-last
           keep-last
           older-than
-          older-than]
+          older-than
+          (boolean disabled-embeddings)]
          jdbc-opts)))))
 
 (defn- prune-run!
@@ -643,7 +662,7 @@
                                  :lifecycle_status (:lifecycle_status run)
                                  :embedding_dimensions (:embedding_dimensions run)
                                  :partition partition-name
-                                 :criteria (select-keys opts [:keep-last :older-than])}})
+                                 :criteria (select-keys opts [:keep-last :older-than :disabled-embeddings])}})
     (assoc run :partition partition-name)))
 
 (defn prune-runs!

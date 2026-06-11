@@ -25,6 +25,15 @@
                   {:type :alida.embed/unsupported-provider
                    :provider (:provider provider-cfg)})))
 
+(defmethod embed-batch :noop
+  [_sys provider-cfg texts]
+  (let [dimensions (:embedding_dimensions provider-cfg)]
+    (when-not (pos-int? dimensions)
+      (throw (ex-info "Noop embedding provider requires positive embedding_dimensions"
+                      {:type :alida.embed/invalid-dimensions
+                       :embedding-dimensions dimensions})))
+    (mapv (fn [_] (vec (repeat dimensions 0.0))) texts)))
+
 (defn fingerprint
   [provider-cfg]
   (-> provider-cfg

@@ -182,6 +182,14 @@
            :model "text-embedding-3-small"}
           ["a" "b"])))))
 
+(deftest noop-provider-returns-placeholder-vectors
+  (is (= [[0.0 0.0 0.0] [0.0 0.0 0.0]]
+         (embed/embed-batch
+          {}
+          {:provider "noop"
+           :embedding_dimensions 3}
+          ["a" "b"]))))
+
 (deftest unsupported-provider-is-rejected
   (is (thrown-with-msg?
        clojure.lang.ExceptionInfo

@@ -208,6 +208,71 @@
   [document]
   (token/estimate (json-block document)))
 
+(defn- with-chunks
+  [document chunks]
+  (assoc document :chunks (vec chunks)))
+
+(defn- chunk-document-token-estimate
+  [document chunk]
+  (document-token-estimate (with-chunks document [chunk])))
+
+(defn- require-chunk-fits!
+  [document chunk max-tokens]
+  (let [tokens (chunk-document-token-estimate document chunk)]
+    (when (> tokens max-tokens)
+      (throw (ex-info "Verification document chunk exceeds max_prompt_tokens"
+                      {:type :alida.verify/chunk-exceeds-max-prompt-tokens
+                       :canonical-url (:canonical_url document)
+                       :content-hash (:content_hash chunk)
+                       :estimated-tokens tokens
+                       :max-prompt-tokens max-tokens})))
+    tokens))
+
+(defn- append-chunk-document
+  [{:keys [document batches current max-tokens]} chunk]
+  (let [candidate (conj current chunk)
+        candidate-tokens (document-token-estimate (with-chunks document candidate))]
+    (cond
+      (<= candidate-tokens max-tokens)
+      {:document document
+       :batches batches
+       :current candidate
+       :max-tokens max-tokens}
+
+      (seq current)
+      (do
+        (require-chunk-fits! document chunk max-tokens)
+        {:document document
+         :batches (conj batches (with-chunks document current))
+         :current [chunk]
+         :max-tokens max-tokens})
+
+      :else
+      (do
+        (require-chunk-fits! document chunk max-tokens)
+        {:document document
+         :batches batches
+         :current [chunk]
+         :max-tokens max-tokens}))))
+
+(defn- split-document
+  [document max-tokens]
+  (if (<= (document-token-estimate document) max-tokens)
+    [document]
+    (let [{:keys [batches current]}
+          (reduce append-chunk-document
+                  {:document document
+                   :batches []
+                   :current []
+                   :max-tokens max-tokens}
+                  (:chunks document))]
+      (cond-> batches
+        (seq current) (conj (with-chunks document current))))))
+
+(defn- prompt-documents
+  [documents max-tokens]
+  (mapcat #(split-document % max-tokens) documents))
+
 (defn- append-document-batch
   [{:keys [batches current current-tokens max-tokens]} document]
   (let [document-tokens (document-token-estimate document)
@@ -224,7 +289,8 @@
 
 (defn document-batches
   [documents max-tokens]
-  (let [{:keys [batches current]} (reduce append-document-batch
+  (let [documents (prompt-documents documents max-tokens)
+        {:keys [batches current]} (reduce append-document-batch
                                           {:batches []
                                            :current []
                                            :current-tokens 0

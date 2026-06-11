@@ -46,6 +46,7 @@
     :parse-fn parse-long]
    [nil "--json" "Print machine-readable JSON when supported"]
    [nil "--allow-caution" "For activate: allow activating a verified caution run"]
+   [nil "--disabled-embeddings" "For prune: prune runs created with disabled/noop embeddings"]
    [nil "--keep-last N" "For prune: keep the last N runs per index"
     :parse-fn parse-long]
    [nil "--older-than DURATION" "For prune: prune runs older than this duration"
@@ -272,7 +273,8 @@
                  sys
                  #(db/prune-runs! %
                                   {:keep-last (:keep-last options)
-                                   :older-than (older-than-cutoff (:older-than options))}))]
+                                   :older-than (older-than-cutoff (:older-than options))
+                                   :disabled-embeddings (:disabled-embeddings options)}))]
     {:exit-code 0
      :message (format-prune-result result)}))
 

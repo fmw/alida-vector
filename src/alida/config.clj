@@ -89,6 +89,10 @@
    "azure-openai" [:deployment_name :api_key]
    "vertex-ai" [:model]})
 
+(defn- verification-enabled?
+  [verification]
+  (not= false (:enabled verification)))
+
 (defn- validate-required-embedding-keys!
   [index]
   (let [embedding (:embedding index)
@@ -107,16 +111,22 @@
 (defn- validate-required-verification-keys!
   [config]
   (let [verification (:verification config)
+        provider (:provider verification)
         required-keys (required-verification-keys (:provider verification))]
-    (doseq [k required-keys
-            :when (nil? (get verification k))]
-      (throw (ex-info (str "Invalid verification config: provider "
-                           (:provider verification)
-                           " requires "
-                           (name k))
-                      {:type :alida.config/missing-verification-provider-config
-                       :provider (:provider verification)
-                       :key k}))))
+    (when (verification-enabled? verification)
+      (when-not provider
+        (throw (ex-info "Invalid verification config: provider is required when verification is enabled"
+                        {:type :alida.config/missing-verification-provider-config
+                         :key :provider})))
+      (doseq [k required-keys
+              :when (nil? (get verification k))]
+        (throw (ex-info (str "Invalid verification config: provider "
+                             (:provider verification)
+                             " requires "
+                             (name k))
+                        {:type :alida.config/missing-verification-provider-config
+                         :provider (:provider verification)
+                         :key k})))))
   config)
 
 (defn- validate-verification-options!

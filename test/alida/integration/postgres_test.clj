@@ -306,6 +306,41 @@
         (is (str/includes? (-> result :chunks first :content) "Support"))
         (is (pos-int? (-> result :chunks first :estimated_tokens)))))))
 
+(deftest ^:integration crawl-index-can-skip-llm-verification
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (let [file (temp-file ".html"
+                                         "<html lang=\"en\"><head><title>Support</title></head>
+                                          <body><h1>Support</h1><p>This page explains how support works.</p></body></html>")
+                         test-index (assoc index-cfg
+                                           :sources [{:id "fixtures"
+                                                      :type "local"
+                                                      :path (.getPath file)}])
+                         sys (assoc-in (test-system test-index)
+                                       [:alida/config :verification :enabled]
+                                       false)]
+                     (with-redefs [embed/embed-batch (fn [_ _ texts]
+                                                       (mapv (fn [_] (zero-vector 1536)) texts))
+                                   verify/complete (fn [& _]
+                                                     (throw (ex-info "LLM verifier should not be called"
+                                                                     {:type :test/unexpected-llm-call})))]
+                       (let [summary (crawl/crawl-index! sys ds test-index)]
+                         {:summary summary
+                          :run (db/get-run ds (:run_id summary))
+                          :verification (db/get-verification ds (:run_id summary))})))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (testing "disabled LLM verification uses deterministic verdict as final verdict"
+        (is (= "complete" (get-in result [:run :lifecycle_status])))
+        (is (= "pass" (get-in result [:run :verification_verdict])))
+        (is (= "disabled" (get-in result [:verification :provider])))
+        (is (= "pass" (get-in result [:verification :deterministic_verdict])))
+        (is (nil? (get-in result [:verification :llm_verdict])))
+        (is (= "pass" (get-in result [:verification :final_verdict])))
+        (is (= "LLM verification was disabled by config."
+               (get-in result [:verification :reasoning])))))))
+
 (deftest ^:integration crawl-index-reuses-unchanged-chunk-embeddings
   (let [result (with-temp-database
                  (fn [db-config ds]
@@ -438,12 +473,15 @@
                            caution-run (db/create-run! ds index-cfg "hash-1")
                            caution-override-run (db/create-run! ds index-cfg "hash-1")
                            failed-run (db/create-run! ds index-cfg "hash-1")
+                           noop-run (db/create-run! ds index-cfg "hash-1" {:embedding_disabled true
+                                                                           :embedding_provider "noop"})
                            run-1 (db/create-run! ds index-cfg "hash-1")
                            run-2 (db/create-run! ds index-cfg "hash-1")]
                        (db/update-run-status! ds (:id unverified-run) "complete")
                        (db/update-run-status! ds (:id caution-run) "complete" {:verification_verdict "caution"})
                        (db/update-run-status! ds (:id caution-override-run) "complete" {:verification_verdict "caution"})
                        (db/update-run-status! ds (:id failed-run) "complete" {:verification_verdict "fail"})
+                       (db/update-run-status! ds (:id noop-run) "complete" {:verification_verdict "pass"})
                        (let [caution-override-activation (select-keys
                                                           (db/activate-run! ds
                                                                             (:id caution-override-run)
@@ -475,6 +513,11 @@
                                                :activated
                                                (catch clojure.lang.ExceptionInfo e
                                                  (ex-data e)))
+                          :noop-activation (try
+                                             (db/activate-run! ds (:id noop-run))
+                                             :activated
+                                             (catch clojure.lang.ExceptionInfo e
+                                               (ex-data e)))
                           :reject-live (try
                                          (db/reject-run! ds (:id run-1))
                                          :rejected
@@ -504,6 +547,8 @@
                (get-in result [:failed-activation :type])))
         (is (= :verification-not-pass
                (get-in result [:failed-activation :reason])))
+        (is (= :embeddings-disabled
+               (get-in result [:noop-activation :reason])))
         (is (= :live-run
                (get-in result [:reject-live :pointer])))
         (is (= :previous-live-run
@@ -574,6 +619,33 @@
         (is (nil? (:prunable-partition result)))
         (is (nil? (:prunable-report result)))
         (is (= 1 (:events result)))))))
+
+(deftest ^:integration prune-disabled-embeddings-removes-terminal-disabled-runs
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (let [disabled-terminal (db/create-run! ds index-cfg "hash-1" {:embedding_disabled true
+                                                                                   :embedding_provider "noop"})
+                         disabled-active (db/create-run! ds index-cfg "hash-1" {:embedding_disabled true
+                                                                                 :embedding_provider "noop"})
+                         regular-terminal (db/create-run! ds index-cfg "hash-1")]
+                     (doseq [run [disabled-terminal disabled-active regular-terminal]]
+                       (insert-searchable-chunk! ds (:id run) (str "Content " (:id run))))
+                     (db/update-run-status! ds (:id disabled-terminal) "complete" {:verification_verdict "pass"})
+                     (db/update-run-status! ds (:id disabled-active) "crawling")
+                     (db/update-run-status! ds (:id regular-terminal) "complete" {:verification_verdict "pass"})
+                     (let [pruned (db/prune-runs! ds {:disabled-embeddings true})]
+                       {:pruned pruned
+                        :disabled-terminal (db/get-run ds (:id disabled-terminal))
+                        :disabled-active (db/get-run ds (:id disabled-active))
+                        :regular-terminal (db/get-run ds (:id regular-terminal))}))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (testing "disabled-embedding pruning only removes terminal disabled runs"
+        (is (= 1 (get-in result [:pruned :pruned_count])))
+        (is (nil? (:disabled-terminal result)))
+        (is (= "crawling" (get-in result [:disabled-active :lifecycle_status])))
+        (is (= "complete" (get-in result [:regular-terminal :lifecycle_status])))))))
 
 (deftest ^:integration prune-can-remove-runs-referenced-by-diff-previous-run
   (let [result (with-temp-database

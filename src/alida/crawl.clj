@@ -353,6 +353,10 @@
       (:deployment_name verification-cfg)
       (:provider verification-cfg)))
 
+(defn- llm-verification-enabled?
+  [verification-cfg]
+  (not= false (:enabled verification-cfg)))
+
 (defn- combined-llm-result
   [results]
   {:verdict (apply verify/strictest-verdict (map :verdict results))
@@ -364,27 +368,36 @@
 (defn- verify-run!
   [sys ds run run-diff deterministic-verification source-results]
   (let [verification-cfg (:verification (:alida/config sys))
-        prompts (verify/build-prompts
-                 {:run_id (:id run)
-                  :index_name (:index_name run)
-                  :deterministic_verification deterministic-verification
-                  :diff run-diff
-                  :documents (verification-documents source-results run-diff)
-                  :max_prompt_tokens (:max_prompt_tokens verification-cfg)})
-        llm-result (combined-llm-result
-                    (mapv #(verify/complete sys verification-cfg %) prompts))
-        final-verdict (verify/strictest-verdict
-                       (:deterministic_verdict deterministic-verification)
-                       (:verdict llm-result))
-        verification {:provider (:provider verification-cfg)
-                      :model (verifier-model verification-cfg)
-                      :deterministic_verdict (:deterministic_verdict deterministic-verification)
-                      :deterministic_findings (:deterministic_findings deterministic-verification)
-                      :llm_verdict (:verdict llm-result)
-                      :final_verdict final-verdict
-                      :reasoning (:reasoning llm-result)
-                      :llm_security_findings (:security_findings llm-result)
-                      :raw_response (:raw_response llm-result)}]
+        llm-result (when (llm-verification-enabled? verification-cfg)
+                     (let [prompts (verify/build-prompts
+                                    {:run_id (:id run)
+                                     :index_name (:index_name run)
+                                     :deterministic_verification deterministic-verification
+                                     :diff run-diff
+                                     :documents (verification-documents source-results run-diff)
+                                     :max_prompt_tokens (:max_prompt_tokens verification-cfg)})]
+                       (combined-llm-result
+                        (mapv #(verify/complete sys verification-cfg %) prompts))))
+        final-verdict (if llm-result
+                        (verify/strictest-verdict
+                         (:deterministic_verdict deterministic-verification)
+                         (:verdict llm-result))
+                        (:deterministic_verdict deterministic-verification))
+        verification (merge
+                      {:provider (if llm-result (:provider verification-cfg) "disabled")
+                       :model (if llm-result (verifier-model verification-cfg) "llm-verification-disabled")
+                       :deterministic_verdict (:deterministic_verdict deterministic-verification)
+                       :deterministic_findings (:deterministic_findings deterministic-verification)
+                       :final_verdict final-verdict
+                       :reasoning (if llm-result
+                                    (:reasoning llm-result)
+                                    "LLM verification was disabled by config.")
+                       :raw_response (if llm-result
+                                       (:raw_response llm-result)
+                                       {:llm_verification_enabled false})}
+                      (when llm-result
+                        {:llm_verdict (:verdict llm-result)
+                         :llm_security_findings (:security_findings llm-result)}))]
     (db/save-verification! ds (:id run) verification)
     verification))
 
@@ -418,7 +431,9 @@
             run (db/create-run! ds
                                 index-cfg
                                 structural-config-hash
-                                {:embedding_fingerprint (embed/fingerprint (:embedding index-cfg))})]
+                                {:embedding_fingerprint (embed/fingerprint (:embedding index-cfg))
+                                 :embedding_provider (get-in index-cfg [:embedding :provider])
+                                 :embedding_disabled (= "noop" (get-in index-cfg [:embedding :provider]))})]
         (try
           (db/update-run-status! ds (:id run) "crawling")
           (let [crawl-started (now-ns)

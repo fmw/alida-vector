@@ -75,7 +75,7 @@
                   :index_name "docs"
                   :deterministic_verification {:deterministic_verdict "pass"}
                   :diff {:summary {:added_count 3}}
-                  :max_prompt_tokens 10
+                  :max_prompt_tokens 64
                   :documents [{:canonical_url "https://example.test/1"
                                :chunks [{:content "first long enough document"}]}
                               {:canonical_url "https://example.test/2"
@@ -85,6 +85,35 @@
     (is (< 1 (count prompts)))
     (is (every? #(str/includes? % "Batch:") prompts))
     (is (str/includes? (first prompts) "first long enough document"))))
+
+(deftest build-prompts-splits-oversized-documents-by-chunk
+  (let [prompts (verify/build-prompts
+                 {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                  :index_name "docs"
+                  :deterministic_verification {:deterministic_verdict "pass"}
+                  :diff {:summary {:changed_count 1}}
+                  :max_prompt_tokens 170
+                  :documents [{:canonical_url "https://example.test/large"
+                               :chunks [{:content "alpha marker one"}
+                                        {:content (apply str (repeat 45 "middle "))}
+                                        {:content "omega marker three"}]}]})]
+    (is (< 1 (count prompts)))
+    (is (every? #(str/includes? % "example.test") prompts))
+    (is (some #(str/includes? % "alpha marker one") prompts))
+    (is (some #(str/includes? % "omega marker three") prompts))))
+
+(deftest build-prompts-fails-before-provider-for-single-oversized-chunk
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo
+       #"exceeds max_prompt_tokens"
+       (verify/build-prompts
+        {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+         :index_name "docs"
+         :deterministic_verification {:deterministic_verdict "pass"}
+         :diff {:summary {:changed_count 1}}
+         :max_prompt_tokens 10
+         :documents [{:canonical_url "https://example.test/large"
+                      :chunks [{:content (apply str (repeat 100 "word "))}]}]}))))
 
 (deftest parse-structured-verdict-validates-verdict
   (is (= {:verdict "caution"

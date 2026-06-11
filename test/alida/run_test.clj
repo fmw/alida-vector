@@ -10,7 +10,15 @@
 
 (deftest decide-action-auto-activates-safe-delta-run
   (is (= :activate
-         (run/decide-action {:auto_activate true}
+         (run/decide-action {:auto_activate true
+                             :embedding {:provider "openai"}}
+                            {:final_verdict "pass"
+                             :first_run false}))))
+
+(deftest decide-action-never-auto-activates-noop-embeddings
+  (is (= :hold
+         (run/decide-action {:auto_activate true
+                             :embedding {:provider "noop"}}
                             {:final_verdict "pass"
                              :first_run false}))))
 
