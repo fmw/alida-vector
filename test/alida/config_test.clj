@@ -257,6 +257,68 @@ indexes:
       (finally
         (.delete file)))))
 
+(deftest azure-openai-verification-endpoint-is-required
+  (let [file (java.io.File/createTempFile "alida-azure-openai-verification-provider" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: azure-openai
+  deployment_name: gpt-5.1
+  api_key: test-key
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"provider azure-openai requires endpoint"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest vertex-ai-verification-project-is-required
+  (let [file (java.io.File/createTempFile "alida-vertex-ai-verification-provider" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: vertex-ai
+  location: europe-west4
+  model: gemini-2.5-flash-lite
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"provider vertex-ai requires project"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
 (deftest disabled-llm-verification-does-not-require-provider-secrets
   (let [file (java.io.File/createTempFile "alida-disabled-verification" ".yml")]
     (try

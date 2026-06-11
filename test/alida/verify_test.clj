@@ -1,6 +1,8 @@
 (ns alida.verify-test
   (:require [alida.verify :as verify]
+            [alida.verify.azure-openai]
             [alida.verify.openai]
+            [alida.verify.vertex-ai]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]))
@@ -157,3 +159,64 @@
       (is (= 0 (:temperature body)))
       (is (= {:type "json_object"} (:response_format body)))
       (is (= ["system" "user"] (mapv :role (:messages body)))))))
+
+(deftest azure-openai-complete-requests-json-verdict
+  (let [requests (atom [])
+        sys {:alida/http-request
+             (fn [request]
+               (swap! requests conj request)
+               {:status 200
+                :body (json/write-str
+                       {:choices [{:message {:content (json/write-str
+                                                       {:verdict "pass"
+                                                        :reasoning "Looks good"
+                                                        :findings []
+                                                        :security_findings []})}}]})})}
+        result (verify/complete sys
+                                {:provider "azure-openai"
+                                 :endpoint "https://example.openai.azure.com/"
+                                 :deployment_name "gpt deployment"
+                                 :api_version "2024-02-01"
+                                 :api_key "test-key"}
+                                "verify this")]
+    (is (= "pass" (:verdict result)))
+    (is (= "https://example.openai.azure.com/openai/deployments/gpt%20deployment/chat/completions?api-version=2024-02-01"
+           (:url (first @requests))))
+    (is (= "test-key" (get-in (first @requests) [:headers "api-key"])))
+    (let [body (json/read-str (:body (first @requests)) :key-fn keyword)]
+      (is (= 0 (:temperature body)))
+      (is (= {:type "json_object"} (:response_format body)))
+      (is (= ["system" "user"] (mapv :role (:messages body)))))))
+
+(deftest vertex-ai-complete-requests-json-verdict
+  (let [requests (atom [])
+        sys {:alida/http-request
+             (fn [request]
+               (swap! requests conj request)
+               {:status 200
+                :body (json/write-str
+                       {:candidates [{:content {:parts [{:text (json/write-str
+                                                                {:verdict "pass"
+                                                                 :reasoning "Looks good"
+                                                                 :findings []
+                                                                 :security_findings []})}]}}]})})}
+        result (verify/complete sys
+                                {:provider "vertex-ai"
+                                 :project "alida-project"
+                                 :location "europe-west4"
+                                 :model "gemini-2.5-flash-lite"
+                                 :access_token "vertex-token"}
+                                "verify this")]
+    (is (= "pass" (:verdict result)))
+    (is (= "https://europe-west4-aiplatform.googleapis.com/v1/projects/alida-project/locations/europe-west4/publishers/google/models/gemini-2.5-flash-lite:generateContent"
+           (:url (first @requests))))
+    (is (= "Bearer vertex-token"
+           (get-in (first @requests) [:headers "Authorization"])))
+    (let [body (json/read-str (:body (first @requests)) :key-fn keyword)]
+      (is (= {:parts [{:text verify/system-prompt}]}
+             (:systemInstruction body)))
+      (is (= [{:role "user" :parts [{:text "verify this"}]}]
+             (:contents body)))
+      (is (= {:temperature 0
+              :responseMimeType "application/json"}
+             (:generationConfig body))))))
