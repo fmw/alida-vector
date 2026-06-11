@@ -284,6 +284,44 @@
     (jsonb {})]
    jdbc-opts))
 
+(defn save-verification!
+  [connectable value {:keys [provider model deterministic_verdict deterministic_findings llm_verdict
+                             final_verdict reasoning llm_security_findings raw_response]}]
+  (require-verdict! deterministic_verdict)
+  (when llm_verdict
+    (require-verdict! llm_verdict))
+  (when final_verdict
+    (require-verdict! final_verdict))
+  (jdbc/execute-one!
+   connectable
+   ["INSERT INTO alida_verifications
+       (run_id, provider, model, deterministic_verdict, deterministic_findings, llm_verdict,
+        final_verdict, reasoning, llm_security_findings, raw_response)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (run_id) DO UPDATE
+     SET provider = EXCLUDED.provider,
+         model = EXCLUDED.model,
+         deterministic_verdict = EXCLUDED.deterministic_verdict,
+         deterministic_findings = EXCLUDED.deterministic_findings,
+         llm_verdict = EXCLUDED.llm_verdict,
+         final_verdict = EXCLUDED.final_verdict,
+         reasoning = EXCLUDED.reasoning,
+         llm_security_findings = EXCLUDED.llm_security_findings,
+         raw_response = EXCLUDED.raw_response,
+         created_at = now()
+     RETURNING *"
+    (run-id value)
+    provider
+    model
+    deterministic_verdict
+    (jsonb (or deterministic_findings []))
+    llm_verdict
+    final_verdict
+    reasoning
+    (jsonb (or llm_security_findings []))
+    (jsonb (or raw_response {}))]
+   jdbc-opts))
+
 (defn get-verification
   [connectable value]
   (jdbc/execute-one!

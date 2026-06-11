@@ -5,6 +5,7 @@
             [alida.embed :as embed]
             [alida.source.local]
             [alida.vector.pgvector :as pgvector]
+            [alida.verify :as verify]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
@@ -56,6 +57,26 @@
               :safety_multiplier 1.2}
    :sources [{:id "support"
               :type "website"}]})
+
+(def verification-cfg
+  {:provider "openai"
+   :model "gpt-test"
+   :api_key "test-key"})
+
+(defn- test-system
+  [index]
+  {:alida/config {:alida.config/structural-hash "hash-1"
+                  :verification verification-cfg
+                  :indexes [index]}})
+
+(defn- passing-verification
+  [_sys _provider-cfg _prompt]
+  {:verdict "pass"
+   :reasoning "Fixture verification passed"
+   :findings []
+   :security_findings []
+   :raw_response {:verdict "pass"
+                  :reasoning "Fixture verification passed"}})
 
 (defn- first-axis-vector-sql
   [dimensions]
@@ -228,10 +249,10 @@
                                            :sources [{:id "fixtures"
                                                       :type "local"
                                                       :path (.getPath file)}])
-                         sys {:alida/config {:alida.config/structural-hash "hash-1"
-                                             :indexes [test-index]}}]
+                         sys (test-system test-index)]
                      (with-redefs [embed/embed-batch (fn [_ _ texts]
-                                                       (mapv (fn [_] (zero-vector 1536)) texts))]
+                                                       (mapv (fn [_] (zero-vector 1536)) texts))
+                                   verify/complete passing-verification]
                        (let [summary (crawl/crawl-index! sys ds test-index)]
                          {:summary summary
                           :run (db/get-run ds (:run_id summary))
@@ -262,10 +283,10 @@
       (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
       (testing "candidate crawl persists run content"
         (is (= "complete" (get-in result [:run :lifecycle_status])))
-        (is (nil? (get-in result [:run :verification_verdict])))
+        (is (= "pass" (get-in result [:run :verification_verdict])))
         (is (= "pass" (get-in result [:verification :deterministic_verdict])))
-        (is (nil? (get-in result [:verification :llm_verdict])))
-        (is (nil? (get-in result [:verification :final_verdict])))
+        (is (= "pass" (get-in result [:verification :llm_verdict])))
+        (is (= "pass" (get-in result [:verification :final_verdict])))
         (is (str/includes? (get-in result [:report :slack_summary])
                            "support-knowledge-base run"))
         (is (str/includes? (get-in result [:report :full_report])
@@ -296,12 +317,12 @@
                                            :sources [{:id "fixtures"
                                                       :type "local"
                                                       :path (.getPath file)}])
-                         sys {:alida/config {:alida.config/structural-hash "hash-1"
-                                             :indexes [test-index]}}
+                         sys (test-system test-index)
                          embedded-texts (atom [])]
                      (with-redefs [embed/embed-batch (fn [_ _ texts]
                                                        (swap! embedded-texts conj (vec texts))
-                                                       (mapv (fn [_] (zero-vector 1536)) texts))]
+                                                       (mapv (fn [_] (zero-vector 1536)) texts))
+                                   verify/complete passing-verification]
                        (let [first-summary (crawl/crawl-index! sys ds test-index)
                              second-summary (crawl/crawl-index! sys ds test-index)]
                          {:first-summary first-summary
@@ -338,10 +359,10 @@
                                            :sources [{:id "fixtures"
                                                       :type "local"
                                                       :path (.getPath file)}])
-                         sys {:alida/config {:alida.config/structural-hash "hash-1"
-                                             :indexes [test-index]}}]
+                         sys (test-system test-index)]
                      (with-redefs [embed/embed-batch (fn [_ _ texts]
-                                                       (mapv (fn [_] (zero-vector 1536)) texts))]
+                                                       (mapv (fn [_] (zero-vector 1536)) texts))
+                                   verify/complete passing-verification]
                        (let [first-summary (crawl/crawl-index! sys ds test-index)]
                          (db/update-run-status! ds (:run_id first-summary) "complete" {:verification_verdict "pass"})
                          (db/activate-run! ds (:run_id first-summary))
@@ -388,12 +409,12 @@
                          changed-index (assoc-in base-index
                                                  [:embedding :endpoint]
                                                  "https://second.example.openai.azure.com/")
-                         sys {:alida/config {:alida.config/structural-hash "hash-1"
-                                             :indexes [base-index]}}
+                         sys (test-system base-index)
                          embedded-texts (atom [])]
                      (with-redefs [embed/embed-batch (fn [_ _ texts]
                                                        (swap! embedded-texts conj (vec texts))
-                                                       (mapv (fn [_] (zero-vector 1536)) texts))]
+                                                       (mapv (fn [_] (zero-vector 1536)) texts))
+                                   verify/complete passing-verification]
                        (let [first-summary (crawl/crawl-index! sys ds base-index)
                              second-summary (crawl/crawl-index! sys ds changed-index)]
                          {:first-summary first-summary
