@@ -249,7 +249,15 @@
                                            :sources [{:id "fixtures"
                                                       :type "local"
                                                       :path (.getPath file)}])
-                         sys (test-system test-index)]
+                         slack-requests (atom [])
+                         sys (-> (test-system test-index)
+                                 (assoc-in [:alida/config :notifications :slack_webhook_url]
+                                           "https://example.test/slack")
+                                 (assoc :alida/http-request
+                                        (fn [request]
+                                          (swap! slack-requests conj request)
+                                          {:status 200
+                                           :body "ok"})))]
                      (with-redefs [embed/embed-batch (fn [_ _ texts]
                                                        (mapv (fn [_] (zero-vector 1536)) texts))
                                    verify/complete passing-verification]
@@ -278,7 +286,8 @@
                                      FROM alida_chunks_1536
                                      WHERE run_id = ?"
                                     (:run_id summary)]
-                                   db/jdbc-opts)})))))]
+                                   db/jdbc-opts)
+                          :slack-requests @slack-requests})))))]
     (if (= :skipped result)
       (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
       (testing "candidate crawl persists run content"
@@ -289,6 +298,11 @@
         (is (= "pass" (get-in result [:verification :final_verdict])))
         (is (str/includes? (get-in result [:report :slack_summary])
                            "support-knowledge-base run"))
+        (is (= 1 (count (:slack-requests result))))
+        (let [payload (json/read-str (:body (first (:slack-requests result))))]
+          (is (= (get-in result [:report :slack_summary])
+                 (get payload "text")))
+          (is (seq (get payload "blocks"))))
         (is (str/includes? (get-in result [:report :full_report])
                            "Documents: 1"))
         (is (= 1 (get-in result [:summary :document_count])))

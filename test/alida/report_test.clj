@@ -64,6 +64,47 @@
     (is (str/includes? (:slack_summary built) "deterministic=caution"))
     (is (str/includes? (:slack_summary built) "verdict=-"))))
 
+(deftest builds-slack-blocks
+  (let [blocks (:slack_blocks (report/build (assoc summary
+                                                   :verification_verdict "caution"
+                                                   :verification {:llm_verdict "caution"})))]
+    (is (= "header" (:type (first blocks))))
+    (is (= "⚠️ Alida Vector crawl needs review"
+           (get-in (first blocks) [:text :text])))
+    (is (some #(str/includes? % "Verdict")
+              (mapcat (fn [block] (map :text (:fields block))) blocks)))
+    (is (some #(str/includes? % "Changes")
+              (mapcat (fn [block] (map :text (:fields block))) blocks)))
+    (is (some #(str/includes? % "Actual changes")
+              (keep #(get-in % [:text :text]) blocks)))
+    (is (some #(str/includes? % "https://example.test/added")
+              (keep #(get-in % [:text :text]) blocks)))
+    (is (some #(str/includes? % "https://example.test/old")
+              (keep #(get-in % [:text :text]) blocks)))
+    (is (some #(str/includes? % "activate")
+              (keep #(get-in % [:text :text]) blocks)))))
+
+(deftest slack-blocks-truncate-change-lists
+  (let [many-added (mapv (fn [n]
+                           {:source_id "website"
+                            :canonical_url (str "https://example.test/added/" n)})
+                         (range 52))
+        blocks (:slack_blocks (report/build (assoc-in summary
+                                                       [:diff :added_urls]
+                                                       many-added)))
+        text (str/join "\n" (keep #(get-in % [:text :text]) blocks))]
+    (is (str/includes? text "https://example.test/added/0"))
+    (is (str/includes? text "https://example.test/added/49"))
+    (is (not (str/includes? text "https://example.test/added/50")))
+    (is (str/includes? text "5 more in the full report"))))
+
+(deftest slack-blocks-omit-verification-detail-field
+  (let [blocks (:slack_blocks (report/build (assoc summary
+                                                   :verification_verdict "pass"
+                                                   :verification {:llm_verdict "pass"})))
+        field-texts (mapcat (fn [block] (map :text (:fields block))) blocks)]
+    (is (not-any? #(str/includes? % "Verification") field-texts))))
+
 (deftest builds-full-report
   (let [full-report (:full_report (report/build summary))]
     (is (str/includes? full-report "Run: 018c9099-041d-7f5b-9b65-5b8f08f8e61d"))
