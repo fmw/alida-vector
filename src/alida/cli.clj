@@ -1,6 +1,7 @@
 (ns alida.cli
   (:require [alida.crawl :as crawl]
             [alida.db.postgres :as db]
+            [alida.search :as search]
             [alida.system :as system]
             [clojure.string :as str]
             [clojure.tools.cli :as tools.cli]
@@ -128,6 +129,27 @@
   [{:keys [index_name message]}]
   (format "%s  failed: %s" index_name message))
 
+(defn- query-string
+  [arguments]
+  (str/join " " arguments))
+
+(defn- format-search-row
+  [{:keys [score index_name source_id canonical_url title locale content]}]
+  (format "%.4f  %-28s  %-16s  %-5s  %s%s\n%s"
+          (double (or score 0.0))
+          index_name
+          source_id
+          (or locale "-")
+          canonical_url
+          (if (str/blank? title) "" (str "  " title))
+          (str/replace (or content "") #"\s+" " ")))
+
+(defn- format-search-results
+  [rows]
+  (if (seq rows)
+    (str/join "\n\n" (map format-search-row rows))
+    "No results found."))
+
 (defn- format-crawl-result
   [{:keys [succeeded failed]}]
   (str/join
@@ -203,15 +225,34 @@
      :message (str "Rolled back index " index-name ".")}))
 
 (defmethod execute "search"
-  [command sys options arguments]
+  [_ sys options arguments]
   (require-arg arguments "query")
-  (not-implemented command sys options arguments))
+  (let [query (query-string arguments)
+        results (with-datasource
+                  sys
+                  #(search/search-live sys
+                                       %
+                                       query
+                                       {:index-name (:index options)
+                                        :limit (:limit options)}))]
+    {:exit-code 0
+     :message (format-search-results results)}))
 
 (defmethod execute "search-run"
-  [command sys options arguments]
-  (require-arg arguments "run-id")
-  (require-arg (rest arguments) "query")
-  (not-implemented command sys options arguments))
+  [_ sys options arguments]
+  (let [run-id (require-arg arguments "run-id")
+        query-args (rest arguments)]
+    (require-arg query-args "query")
+    (let [query (query-string query-args)
+          results (with-datasource
+                    sys
+                    #(search/search-run sys
+                                        %
+                                        run-id
+                                        query
+                                        {:limit (:limit options)}))]
+      {:exit-code 0
+       :message (format-search-results results)})))
 
 (defmethod execute :default
   [command sys options arguments]

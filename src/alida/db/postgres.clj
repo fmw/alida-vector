@@ -217,6 +217,10 @@
     embedding
     (str "[" (str/join "," embedding) "]")))
 
+(defn- search-limit
+  [limit]
+  (or limit 10))
+
 (defn insert-chunks!
   [connectable embedding-dimensions run source-cfg document-row chunks]
   (let [table-name (pgvector/dimension-table-name embedding-dimensions)]
@@ -433,6 +437,72 @@
    connectable
    ["SELECT * FROM alida_reports WHERE run_id = ?" (run-id value)]
    jdbc-opts))
+
+(defn search-live-chunks
+  [connectable embedding-dimensions query-embedding {:keys [index_names limit]}]
+  (with-connection
+    connectable
+    (fn [conn]
+      (let [view-name (pgvector/live-view-name embedding-dimensions)
+            query-vector (vector-literal query-embedding)
+            limit (search-limit limit)]
+        (jdbc/execute!
+         conn
+         (if (seq index_names)
+           [(format
+             "SELECT index_name, run_id, document_id, source_id, canonical_url, title, locale,
+                     content_hash, content, heading_path, metadata, estimated_tokens,
+                     (embedding <=> ?::vector) AS distance,
+                     (1 - (embedding <=> ?::vector)) AS score
+              FROM %s
+              WHERE index_name = ANY(?)
+              ORDER BY embedding <=> ?::vector
+              LIMIT ?"
+             view-name)
+            query-vector
+            query-vector
+            (text-array conn index_names)
+            query-vector
+            limit]
+           [(format
+             "SELECT index_name, run_id, document_id, source_id, canonical_url, title, locale,
+                     content_hash, content, heading_path, metadata, estimated_tokens,
+                     (embedding <=> ?::vector) AS distance,
+                     (1 - (embedding <=> ?::vector)) AS score
+              FROM %s
+              ORDER BY embedding <=> ?::vector
+              LIMIT ?"
+             view-name)
+            query-vector
+            query-vector
+            query-vector
+            limit])
+         jdbc-opts)))))
+
+(defn search-run-chunks
+  [connectable embedding-dimensions value query-embedding {:keys [limit]}]
+  (let [table-name (pgvector/dimension-table-name embedding-dimensions)
+        query-vector (vector-literal query-embedding)]
+    (jdbc/execute!
+     connectable
+     [(format
+       "SELECT r.index_name, c.run_id, c.document_id, c.source_id, d.canonical_url, d.title,
+               d.locale, c.content_hash, c.content, c.heading_path, c.metadata,
+               c.estimated_tokens, (c.embedding <=> ?::vector) AS distance,
+               (1 - (c.embedding <=> ?::vector)) AS score
+        FROM %s c
+        JOIN alida_runs r ON r.id = c.run_id
+        JOIN alida_documents d ON d.id = c.document_id
+        WHERE c.run_id = ?
+        ORDER BY c.embedding <=> ?::vector
+        LIMIT ?"
+       table-name)
+      query-vector
+      query-vector
+      (run-id value)
+      query-vector
+      (search-limit limit)]
+     jdbc-opts)))
 
 (defn activate-run!
   ([connectable value]

@@ -56,10 +56,14 @@
    :sources [{:id "support"
               :type "website"}]})
 
-(defn- zero-vector-sql
+(defn- first-axis-vector-sql
   [dimensions]
-  (format "('[' || array_to_string(array_fill(0.0::float8, ARRAY[%d]), ',') || ']')::vector"
-          dimensions))
+  (format "('[' || array_to_string(ARRAY[1.0::float8] || array_fill(0.0::float8, ARRAY[%d]), ',') || ']')::vector"
+          (dec dimensions)))
+
+(defn- first-axis-vector
+  [dimensions]
+  (vec (cons 1.0 (repeat (dec dimensions) 0.0))))
 
 (defn- zero-vector
   [dimensions]
@@ -132,7 +136,7 @@
                            INSERT INTO alida_chunks_1536
                              (run_id, source_id, document_id, chunk_index, chunk_count, content_hash, content, embedding, estimated_tokens)
                            SELECT ?, 'support', id, 0, 1, 'chunk-hash', 'Example content', "
-                          (zero-vector-sql 1536)
+                          (first-axis-vector-sql 1536)
                           ", 2 FROM doc")
                          (:id run-1)
                          (:id run-1)])
@@ -143,6 +147,16 @@
                                       ["SELECT index_name, source_id, canonical_url, title, locale, content_hash, content, estimated_tokens
                                         FROM alida_live_chunks_1536"]
                                       db/jdbc-opts)
+                        :search-live (db/search-live-chunks ds
+                                                            1536
+                                                            (first-axis-vector 1536)
+                                                            {:index_names [(:name index-cfg)]
+                                                             :limit 5})
+                        :search-run (db/search-run-chunks ds
+                                                          1536
+                                                          (:id run-1)
+                                                          (first-axis-vector 1536)
+                                                          {:limit 5})
                         :events (:n (jdbc/execute-one!
                                      ds
                                      ["SELECT count(*) AS n FROM alida_events"]
@@ -161,6 +175,9 @@
                  :content "Example content"
                  :estimated_tokens 2}]
                (:live-chunks result)))
+        (is (= ["Example content"] (mapv :content (:search-live result))))
+        (is (= ["Example content"] (mapv :content (:search-run result))))
+        (is (= 1.0 (double (-> result :search-live first :score))))
         (is (<= 8 (:events result)))))))
 
 (deftest ^:integration crawl-index-stores-candidate-documents-and-chunks

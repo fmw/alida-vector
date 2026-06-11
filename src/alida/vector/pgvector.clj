@@ -24,6 +24,7 @@
 
 (defn live-view-name
   [embedding-dimensions]
+  (require-supported-dimension! embedding-dimensions)
   (str "alida_live_chunks_" embedding-dimensions))
 
 (defn run-partition-name
