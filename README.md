@@ -45,6 +45,8 @@ For crawl cleanup and extraction tuning, see [Crawl Tuning](docs/tuning.md).
 
 For development-time verifier checks with intentionally unsafe local content, see [LLM Verification Fixture](docs/llm-verification-fixture.md).
 
+For container and Kubernetes deployment notes, see [Deployment](docs/deployment.md).
+
 ## Contact
 
 If you're using Alida Vector or have any questions, I'd love to hear from you. You can make a GitHub issue or reach out through fmw@vix.io.
