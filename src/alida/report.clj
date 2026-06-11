@@ -146,13 +146,14 @@
           (value (:embedded_chunk_count embedding-stats))
           (value (:embedding_request_count embedding-stats))))
 
-(defn- verification-summary
-  [summary]
-  (format "deterministic %s / llm %s"
-          (deterministic-verdict summary)
-          (llm-verdict summary)))
+(defn- summary-fields
+  [summary document-count chunk-count error-count embedding-stats]
+  [(field "Content" (content-summary document-count chunk-count error-count))
+   (field "Changes" (change-summary summary))
+   (field "Embeddings" (embedding-summary embedding-stats))])
 
-(def max-slack-change-entries-per-kind 3)
+(def max-slack-change-entries 50)
+(def max-slack-section-text-length 2800)
 (def max-slack-url-length 110)
 
 (defn- display-url
@@ -184,39 +185,79 @@
        " → "
        (display-url (:current_canonical_url entry))))
 
+(defn- append-change-group
+  [{:keys [remaining] :as state} {:keys [title entries line-fn]}]
+  (if (or (not (seq entries)) (zero? remaining))
+    (update state :hidden-count + (count entries))
+    (let [visible (take remaining entries)
+          hidden (- (count entries) (count visible))]
+      (-> state
+          (update :lines into (cons (str "*" title "*")
+                                    (map line-fn visible)))
+          (update :hidden-count + hidden)
+          (update :remaining - (count visible))))))
+
+(defn- change-groups
+  [{:keys [diff]}]
+  [{:title "Added"
+    :entries (:added_urls diff)
+    :line-fn slack-added-line}
+   {:title "Removed"
+    :entries (:removed_urls diff)
+    :line-fn slack-removed-line}
+   {:title "Changed"
+    :entries (:changed_urls diff)
+    :line-fn slack-changed-line}
+   {:title "Moved"
+    :entries (:moved_urls diff)
+    :line-fn slack-moved-line}])
+
 (defn- slack-change-lines
-  [title entries line-fn]
-  (when (seq entries)
-    (let [visible (take max-slack-change-entries-per-kind entries)
-          remaining (- (count entries) (count visible))]
-      (concat [(str "*" title "*")]
-              (map line-fn visible)
-              (when (pos? remaining)
-                [(format "• … %s more in the full report" remaining)])))))
+  [summary]
+  (let [{:keys [lines hidden-count]}
+        (reduce append-change-group
+                {:lines ["*Actual changes*"]
+                 :remaining max-slack-change-entries
+                 :hidden-count 0}
+                (change-groups summary))]
+    (when (< 1 (count lines))
+      (cond-> lines
+        (pos? hidden-count)
+        (conj (format "• … %s more in the full report" hidden-count))))))
+
+(defn- append-line-to-text-block
+  [blocks line]
+  (let [current (peek blocks)
+        candidate (if (seq current)
+                    (str current "\n" line)
+                    line)]
+    (if (<= (count candidate) max-slack-section-text-length)
+      (conj (pop blocks) candidate)
+      (conj blocks line))))
 
 (defn- slack-change-detail-text
-  [{:keys [diff]}]
-  (let [lines (concat
-               (slack-change-lines "Added" (:added_urls diff) slack-added-line)
-               (slack-change-lines "Removed" (:removed_urls diff) slack-removed-line)
-               (slack-change-lines "Changed" (:changed_urls diff) slack-changed-line)
-               (slack-change-lines "Moved" (:moved_urls diff) slack-moved-line))]
-    (when (seq lines)
-      (str "*Actual changes*\n" (str/join "\n" lines)))))
-
-(defn- slack-change-detail-block
   [summary]
-  (when-let [text (slack-change-detail-text summary)]
-    {:type "section"
-     :text {:type "mrkdwn"
-            :text text}}))
+  (when-let [lines (seq (slack-change-lines summary))]
+    (reduce append-line-to-text-block [""] lines)))
+
+(defn- slack-change-detail-blocks
+  [summary]
+  (mapv (fn [text]
+          {:type "section"
+           :text {:type "mrkdwn"
+                  :text text}})
+        (slack-change-detail-text summary)))
 
 (defn slack-blocks
   [{:keys [run_id index_name lifecycle_status document_count chunk_count error_count
            embedding_stats phase_stats] :as summary}]
   (let [final-verdict (verdict summary)]
     (vec
-     (remove nil?
+     (mapcat (fn [block-or-blocks]
+               (cond
+                 (nil? block-or-blocks) []
+                 (sequential? block-or-blocks) block-or-blocks
+                 :else [block-or-blocks]))
              [{:type "header"
                :text {:type "plain_text"
                       :emoji true
@@ -230,11 +271,8 @@
                         (field "Status" (or lifecycle_status "-"))
                         (field "Verdict" final-verdict)]}
               {:type "section"
-               :fields [(field "Content" (content-summary document_count chunk_count error_count))
-                        (field "Changes" (change-summary summary))
-                        (field "Embeddings" (embedding-summary embedding_stats))
-                        (field "Verification" (verification-summary summary))]}
-              (slack-change-detail-block summary)
+               :fields (summary-fields summary document_count chunk_count error_count embedding_stats)}
+              (slack-change-detail-blocks summary)
               {:type "section"
                :fields [(field "Crawl time" (str (ms phase_stats :crawl_duration_ms) " ms"))
                         (field "Embedding time" (str (ms phase_stats :embedding_duration_ms) " ms"))]}
