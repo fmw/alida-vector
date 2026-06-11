@@ -75,8 +75,28 @@
               (mapcat (fn [block] (map :text (:fields block))) blocks)))
     (is (some #(str/includes? % "Changes")
               (mapcat (fn [block] (map :text (:fields block))) blocks)))
+    (is (some #(str/includes? % "Actual changes")
+              (keep #(get-in % [:text :text]) blocks)))
+    (is (some #(str/includes? % "https://example.test/added")
+              (keep #(get-in % [:text :text]) blocks)))
+    (is (some #(str/includes? % "https://example.test/old")
+              (keep #(get-in % [:text :text]) blocks)))
     (is (some #(str/includes? % "activate")
               (keep #(get-in % [:text :text]) blocks)))))
+
+(deftest slack-blocks-truncate-change-lists
+  (let [many-added (mapv (fn [n]
+                           {:source_id "website"
+                            :canonical_url (str "https://example.test/added/" n)})
+                         (range 5))
+        blocks (:slack_blocks (report/build (assoc-in summary
+                                                       [:diff :added_urls]
+                                                       many-added)))
+        text (str/join "\n" (keep #(get-in % [:text :text]) blocks))]
+    (is (str/includes? text "https://example.test/added/0"))
+    (is (str/includes? text "https://example.test/added/2"))
+    (is (not (str/includes? text "https://example.test/added/3")))
+    (is (str/includes? text "2 more in the full report"))))
 
 (deftest builds-full-report
   (let [full-report (:full_report (report/build summary))]

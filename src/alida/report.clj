@@ -93,7 +93,7 @@
         final-verdict (verdict summary)]
     (cond
       (and first-run? (= "pass" final-verdict))
-      "First run. Review the full report before activation."
+      "First run: auto-activation is disabled. Inspect the report before activating a real embedding run."
 
       (= "caution" final-verdict)
       (str "Review required. Inspect with "
@@ -152,36 +152,98 @@
           (deterministic-verdict summary)
           (llm-verdict summary)))
 
+(def max-slack-change-entries-per-kind 3)
+(def max-slack-url-length 110)
+
+(defn- display-url
+  [url]
+  (slack-escape (truncate url max-slack-url-length)))
+
+(defn- source-label
+  [entry]
+  (if-let [source-id (:source_id entry)]
+    (str "`" (slack-escape source-id) "` ")
+    ""))
+
+(defn- slack-added-line
+  [entry]
+  (str "• ✅ " (source-label entry) (display-url (:canonical_url entry))))
+
+(defn- slack-removed-line
+  [entry]
+  (str "• 🗑️ " (source-label entry) (display-url (:canonical_url entry))))
+
+(defn- slack-changed-line
+  [entry]
+  (str "• ✏️ " (source-label entry) (display-url (:canonical_url entry))))
+
+(defn- slack-moved-line
+  [entry]
+  (str "• 🔀 " (source-label entry)
+       (display-url (:previous_canonical_url entry))
+       " → "
+       (display-url (:current_canonical_url entry))))
+
+(defn- slack-change-lines
+  [title entries line-fn]
+  (when (seq entries)
+    (let [visible (take max-slack-change-entries-per-kind entries)
+          remaining (- (count entries) (count visible))]
+      (concat [(str "*" title "*")]
+              (map line-fn visible)
+              (when (pos? remaining)
+                [(format "• … %s more in the full report" remaining)])))))
+
+(defn- slack-change-detail-text
+  [{:keys [diff]}]
+  (let [lines (concat
+               (slack-change-lines "Added" (:added_urls diff) slack-added-line)
+               (slack-change-lines "Removed" (:removed_urls diff) slack-removed-line)
+               (slack-change-lines "Changed" (:changed_urls diff) slack-changed-line)
+               (slack-change-lines "Moved" (:moved_urls diff) slack-moved-line))]
+    (when (seq lines)
+      (str "*Actual changes*\n" (str/join "\n" lines)))))
+
+(defn- slack-change-detail-block
+  [summary]
+  (when-let [text (slack-change-detail-text summary)]
+    {:type "section"
+     :text {:type "mrkdwn"
+            :text text}}))
+
 (defn slack-blocks
   [{:keys [run_id index_name lifecycle_status document_count chunk_count error_count
            embedding_stats phase_stats] :as summary}]
   (let [final-verdict (verdict summary)]
-    [{:type "header"
-      :text {:type "plain_text"
-             :emoji true
-             :text (truncate (format "%s Alida Vector crawl %s"
-                                     (verdict-emoji final-verdict)
-                                     (verdict-label final-verdict))
-                             150)}}
-     {:type "section"
-      :fields [(field "Index" index_name)
-               (field "Run" (short-run-id run_id))
-               (field "Status" (or lifecycle_status "-"))
-               (field "Verdict" final-verdict)]}
-     {:type "section"
-      :fields [(field "Content" (content-summary document_count chunk_count error_count))
-               (field "Changes" (change-summary summary))
-               (field "Embeddings" (embedding-summary embedding_stats))
-               (field "Verification" (verification-summary summary))]}
-     {:type "section"
-      :fields [(field "Crawl time" (str (ms phase_stats :crawl_duration_ms) " ms"))
-               (field "Embedding time" (str (ms phase_stats :embedding_duration_ms) " ms"))]}
-     {:type "section"
-      :text {:type "mrkdwn"
-             :text (str "*Next step*\n"
-                        (slack-escape (action-line summary))
-                        "\n"
-                        (str/join "\n" (map #(str "- " %) (action-commands summary))))}}]))
+    (vec
+     (remove nil?
+             [{:type "header"
+               :text {:type "plain_text"
+                      :emoji true
+                      :text (truncate (format "%s Alida Vector crawl %s"
+                                              (verdict-emoji final-verdict)
+                                              (verdict-label final-verdict))
+                                      150)}}
+              {:type "section"
+               :fields [(field "Index" index_name)
+                        (field "Run" (short-run-id run_id))
+                        (field "Status" (or lifecycle_status "-"))
+                        (field "Verdict" final-verdict)]}
+              {:type "section"
+               :fields [(field "Content" (content-summary document_count chunk_count error_count))
+                        (field "Changes" (change-summary summary))
+                        (field "Embeddings" (embedding-summary embedding_stats))
+                        (field "Verification" (verification-summary summary))]}
+              (slack-change-detail-block summary)
+              {:type "section"
+               :fields [(field "Crawl time" (str (ms phase_stats :crawl_duration_ms) " ms"))
+                        (field "Embedding time" (str (ms phase_stats :embedding_duration_ms) " ms"))]}
+              {:type "section"
+               :text {:type "mrkdwn"
+                      :text (str "*Action*\n"
+                                 (slack-escape (action-line summary))
+                                 "\n"
+                                 (str/join "\n" (map #(str "- " %) (action-commands summary))))}}]))))
 
 (defn- source-line
   [{:keys [source_cfg document_count chunk_count error_count crawl_stats embedding_stats]}]
