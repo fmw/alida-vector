@@ -8,6 +8,11 @@
    :index_name "docs"
    :lifecycle_status "complete"
    :verification_verdict nil
+   :deterministic_verification
+   {:deterministic_verdict "caution"
+    :deterministic_findings [{:check :max_removed_percentage
+                              :verdict "caution"
+                              :message "removed percentage exceeded"}]}
    :diff {:previous_run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61c"
           :summary {:added_count 1
                     :removed_count 1
@@ -56,12 +61,15 @@
     (is (str/includes? (:slack_summary built) "docs run 018c9099-041d-7f5b-9b65-5b8f08f8e61d"))
     (is (str/includes? (:slack_summary built) "documents=2"))
     (is (str/includes? (:slack_summary built) "added=1"))
+    (is (str/includes? (:slack_summary built) "deterministic=caution"))
     (is (str/includes? (:slack_summary built) "verdict=-"))))
 
 (deftest builds-full-report
   (let [full-report (:full_report (report/build summary))]
     (is (str/includes? full-report "Run: 018c9099-041d-7f5b-9b65-5b8f08f8e61d"))
     (is (str/includes? full-report "Diff"))
+    (is (str/includes? full-report "Deterministic Gate"))
+    (is (str/includes? full-report "max_removed_percentage caution: removed percentage exceeded"))
     (is (str/includes? full-report "Added URLs"))
     (is (str/includes? full-report "https://example.test/changed old -> new"))
     (is (str/includes? full-report "Timings"))

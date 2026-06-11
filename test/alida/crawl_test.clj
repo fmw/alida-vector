@@ -83,6 +83,7 @@
     (is (= 0 (:document_count result)))
     (is (= 0 (:chunk_count result)))
     (is (= 1 (:error_count result)))
+    (is (= 1 (:empty_or_short_document_count result)))
     (is (= :alida.crawl/empty-document (-> result :errors first :type)))
     (is (= "en" (-> result :errors first :locale)))))
 

@@ -9,6 +9,7 @@
             [alida.run :as run]
             [alida.source :as source]
             [alida.vector.pgvector :as pgvector]
+            [alida.verify :as verify]
             [clojure.string :as str]
             [com.climate.claypoole :as cp]
             [next.jdbc :as jdbc]))
@@ -91,6 +92,7 @@
                      :title (:title document)
                      :locale (:locale document)
                      :normalized_content_hash (:normalized_content_hash document)}
+             :empty_or_short_document true
              :crawl_stats crawl-stats}))))
     (catch Exception e
       {:error (error-details e {:source_id (:id source-cfg)
@@ -163,6 +165,7 @@
         processing-duration-ms (elapsed-ms processing-started)
         documents (filterv :document results)
         errors (mapv :error (filter :error results))
+        empty-or-short-count (count (filter :empty_or_short_document results))
         item-stats (aggregate-stats (map :crawl_stats results))
         crawl-stats (merge-with +
                                 {:source_duration_ms (elapsed-ms source-started)
@@ -176,6 +179,7 @@
      :document_count (count documents)
      :chunk_count (reduce + 0 (map (comp count :chunks) documents))
      :error_count (count errors)
+     :empty_or_short_document_count empty-or-short-count
      :crawl_stats crawl-stats
      :documents documents
      :errors errors}))
@@ -289,16 +293,18 @@
       (persist-source! tx run index-cfg structural-config-hash source-result))))
 
 (defn- crawl-summary
-  [run source-results embedding-stats phase-stats run-diff]
+  [run source-results embedding-stats phase-stats run-diff deterministic-verification]
   {:run_id (:id run)
    :index_name (:index_name run)
    :lifecycle_status (:lifecycle_status run)
    :verification_verdict (:verification_verdict run)
    :diff run-diff
+   :deterministic_verification deterministic-verification
    :source_count (count source-results)
    :document_count (reduce + 0 (map :document_count source-results))
    :chunk_count (reduce + 0 (map :chunk_count source-results))
    :error_count (reduce + 0 (map :error_count source-results))
+   :empty_or_short_document_count (reduce + 0 (map :empty_or_short_document_count source-results))
    :embedding_stats embedding-stats
    :phase_stats phase-stats
    :sources (mapv #(select-keys % [:source_cfg
@@ -306,6 +312,7 @@
                                    :document_count
                                    :chunk_count
                                    :error_count
+                                   :empty_or_short_document_count
                                    :crawl_stats
                                    :embedding_stats])
                   source-results)})
@@ -365,7 +372,24 @@
                                {:metadata {:embedding_stats stats
                                            :phase_stats phase-stats}})
                     run-diff (compute-and-save-diff! ds completed)
-                    summary (crawl-summary completed source-results stats phase-stats run-diff)]
+                    partial-summary (crawl-summary completed source-results stats phase-stats run-diff nil)
+                    deterministic-verification (verify/deterministic-gate
+                                                (:verification (:alida/config sys))
+                                                partial-summary
+                                                run-diff)
+                    _ (db/save-deterministic-verification!
+                       ds
+                       (:id run)
+                       (assoc deterministic-verification
+                              :provider "deterministic"
+                              :model (or (get-in sys [:alida/config :verification :deterministic_gate_version])
+                                         "deterministic-gate")))
+                    summary (crawl-summary completed
+                                           source-results
+                                           stats
+                                           phase-stats
+                                           run-diff
+                                           deterministic-verification)]
                 (db/save-report! ds (:id run) (report/build summary))
                 summary)))
           (catch Exception e
