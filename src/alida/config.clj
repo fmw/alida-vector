@@ -84,6 +84,11 @@
    "azure-openai" [:endpoint :deployment_name :api_key]
    "vertex-ai" [:project :location :model]})
 
+(def required-verification-keys
+  {"openai" [:model :api_key]
+   "azure-openai" [:deployment_name :api_key]
+   "vertex-ai" [:model]})
+
 (defn- validate-required-embedding-keys!
   [index]
   (let [embedding (:embedding index)
@@ -98,6 +103,21 @@
                        :provider (:provider embedding)
                        :key k})))
     index))
+
+(defn- validate-required-verification-keys!
+  [config]
+  (let [verification (:verification config)
+        required-keys (required-verification-keys (:provider verification))]
+    (doseq [k required-keys
+            :when (nil? (get verification k))]
+      (throw (ex-info (str "Invalid verification config: provider "
+                           (:provider verification)
+                           " requires "
+                           (name k))
+                      {:type :alida.config/missing-verification-provider-config
+                       :provider (:provider verification)
+                       :key k}))))
+  config)
 
 (defn- validate-positive-embedding-options!
   [index]
@@ -288,6 +308,7 @@
                    validate-storage!
                    validate-vector-dimensions!
                    validate-deterministic-thresholds!
+                   validate-required-verification-keys!
                    validate-indexes!)]
     (assoc config
            :alida.config/path (str path)

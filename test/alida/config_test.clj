@@ -47,6 +47,7 @@
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
 indexes:
   - name: docs
     embedding:
@@ -77,6 +78,7 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
 indexes:
   - name: docs
     embedding:
@@ -111,6 +113,7 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
 indexes:
   - name: docs
     embedding:
@@ -141,6 +144,7 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
 indexes:
   - name: docs
     embedding:
@@ -170,12 +174,43 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
 indexes:
   - name: docs
     embedding:
       provider: openai
       model: text-embedding-3-small
       embedding_dimensions: 1536
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"provider openai requires api_key"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest openai-verification-api-key-is-required
+  (let [file (java.io.File/createTempFile "alida-openai-verification-provider" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
     chunking:
       max_input_tokens: 8192
       max_tokens: 6550
@@ -199,6 +234,7 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
 indexes:
   - name: docs
     embedding:
@@ -230,6 +266,7 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
 indexes:
   - name: docs
     embedding:
@@ -261,6 +298,7 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
   deterministic_thresholds:
     max_removed_percentage: 30.0
 indexes:
@@ -293,6 +331,7 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
   deterministic_thresholds:
     max_removed_absolute: -1
 indexes:
@@ -325,6 +364,7 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
 indexes:
   - name: docs
     languages:
@@ -364,6 +404,7 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
 indexes:
   - name: docs
     languages:
@@ -396,6 +437,7 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
 indexes:
   - name: docs
     languages:
@@ -429,6 +471,7 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
 indexes:
   - name: docs
     embedding:
@@ -461,6 +504,7 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
 indexes:
   - name: docs
     languages:
@@ -495,6 +539,7 @@ indexes:
 verification:
   provider: openai
   model: gpt-4.1-mini
+  api_key: test-key
 indexes:
   - name: docs
     embedding:
