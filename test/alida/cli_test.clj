@@ -188,6 +188,7 @@
                     db/prune-runs! (fn [_ opts]
                                      (is (= 2 (:keep-last opts)))
                                      (is (instance? Instant (:older-than opts)))
+                                     (is (nil? (:disabled-embeddings opts)))
                                      {:pruned [{:id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
                                                 :index_name "docs"
                                                 :lifecycle_status "error"
@@ -196,6 +197,21 @@
           (is (= 0 (:exit-code result)))
           (is (str/includes? (:message result) "Pruned 1 runs."))
           (is (str/includes? (:message result) "018c9099-041d-7f5b-9b65-5b8f08f8e61d")))))))
+
+(deftest prune-disabled-embeddings-command-calls-db-layer
+  (with-system-stub
+    (fn []
+      (with-redefs [db/datasource (fn [_]
+                                    (reify java.io.Closeable
+                                      (close [_] nil)))
+                    db/prune-runs! (fn [_ opts]
+                                     (is (nil? (:keep-last opts)))
+                                     (is (nil? (:older-than opts)))
+                                     (is (true? (:disabled-embeddings opts)))
+                                     {:pruned []})]
+        (let [result (cli/run ["prune" "--config" "ignored.yml" "--disabled-embeddings"])]
+          (is (= 0 (:exit-code result)))
+          (is (= "Pruned 0 runs." (:message result))))))))
 
 (deftest migrate-command-calls-db-layer
   (with-system-stub
@@ -251,4 +267,4 @@
                                       (close [_] nil)))]
         (let [result (cli/run ["prune" "--config" "ignored.yml"])]
           (is (= 1 (:exit-code result)))
-          (is (= "Prune requires --keep-last or --older-than" (:message result))))))))
+          (is (= "Prune requires --keep-last, --older-than, or --disabled-embeddings" (:message result))))))))

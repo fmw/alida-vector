@@ -22,6 +22,9 @@
   coverage {:doc "Run unit test coverage with Cloverage"
             :task (shell "clojure -M:coverage")}
 
+  llm-fixture-server {:doc "Serve local pages that should trigger LLM verification caution/fail"
+                      :task (shell "clojure -M:dev-fixtures -m alida.fixture-server")}
+
   repl {:doc "Start a CIDER/nREPL development REPL"
         :override-builtin true
         :task (shell "clojure -M:dev:nrepl")}}}

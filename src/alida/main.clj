@@ -6,7 +6,9 @@
             [alida.embed.vertex-ai]
             [alida.source.local]
             [alida.source.website]
-            [alida.verify.openai]))
+            [alida.verify.azure-openai]
+            [alida.verify.openai]
+            [alida.verify.vertex-ai]))
 
 (defn -main
   [& argv]
