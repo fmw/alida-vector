@@ -94,8 +94,8 @@
       (source/anomaly (case (:status response)
                         404 :cognitect.anomalies/not-found
                         :cognitect.anomalies/fault)
-                      {:type :alida.source.website/fetch-failed
-                       :source-id (:id source-cfg)
-                       :canonical-url (:canonical_url discovered-item)
-                       :status (:status response)
-                       :body (:body response)}))))
+                      (merge {:type :alida.source.website/fetch-failed
+                              :source-id (:id source-cfg)
+                              :canonical-url (:canonical_url discovered-item)
+                              :status (:status response)}
+                             (source/error-response-details response))))))
