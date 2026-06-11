@@ -5,7 +5,8 @@
             [alida.system :as system]
             [clojure.string :as str]
             [clojure.tools.cli :as tools.cli]
-            [integrant.core :as ig]))
+            [integrant.core :as ig])
+  (:import [java.time Duration Instant]))
 
 (def command-names
   #{"activate"
@@ -20,6 +21,24 @@
     "search"
     "search-run"})
 
+(defn- parse-duration
+  [value]
+  (let [value (str/trim value)]
+    (or
+     (try
+       (Duration/parse value)
+       (catch Exception _ nil))
+     (when-let [[_ amount unit] (re-matches #"(?i)^(\d+)\s*(d|day|days|h|hour|hours|m|min|minute|minutes|s|sec|second|seconds)$" value)]
+       (let [amount (parse-long amount)]
+         (case (str/lower-case unit)
+           ("d" "day" "days") (Duration/ofDays amount)
+           ("h" "hour" "hours") (Duration/ofHours amount)
+           ("m" "min" "minute" "minutes") (Duration/ofMinutes amount)
+           ("s" "sec" "second" "seconds") (Duration/ofSeconds amount))))
+     (throw (ex-info (str "Invalid duration: " value)
+                     {:type :alida.cli/invalid-duration
+                      :value value})))))
+
 (def option-specs
   [["-c" "--config PATH" "YAML config file"]
    ["-i" "--index NAME" "Limit command to one index"]
@@ -29,7 +48,8 @@
    [nil "--allow-caution" "For activate: allow activating a verified caution run"]
    [nil "--keep-last N" "For prune: keep the last N runs per index"
     :parse-fn parse-long]
-   [nil "--older-than DURATION" "For prune: prune runs older than this duration"]
+   [nil "--older-than DURATION" "For prune: prune runs older than this duration"
+    :parse-fn parse-duration]
    ["-h" "--help"]])
 
 (defn usage
@@ -150,6 +170,28 @@
     (str/join "\n\n" (map format-search-row rows))
     "No results found."))
 
+(defn- older-than-cutoff
+  [^Duration duration]
+  (when duration
+    (.minus (Instant/now) duration)))
+
+(defn- format-pruned-run
+  [{:keys [id index_name lifecycle_status partition]}]
+  (format "%s  %-28s  %-10s  %s"
+          id
+          index_name
+          lifecycle_status
+          partition))
+
+(defn- format-prune-result
+  [{:keys [pruned]}]
+  (if (seq pruned)
+    (str/join
+     \newline
+     (cons (format "Pruned %s runs." (count pruned))
+           (map format-pruned-run pruned)))
+    "Pruned 0 runs."))
+
 (defn- format-crawl-result
   [{:keys [succeeded failed]}]
   (str/join
@@ -223,6 +265,16 @@
     (with-datasource sys #(db/rollback-index! % index-name))
     {:exit-code 0
      :message (str "Rolled back index " index-name ".")}))
+
+(defmethod execute "prune"
+  [_ sys options _arguments]
+  (let [result (with-datasource
+                 sys
+                 #(db/prune-runs! %
+                                  {:keep-last (:keep-last options)
+                                   :older-than (older-than-cutoff (:older-than options))}))]
+    {:exit-code 0
+     :message (format-prune-result result)}))
 
 (defmethod execute "search"
   [_ sys options arguments]

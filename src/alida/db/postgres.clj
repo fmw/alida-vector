@@ -6,7 +6,7 @@
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs])
   (:import [com.zaxxer.hikari HikariConfig HikariDataSource]
-           [java.sql Connection]
+           [java.sql Connection Timestamp]
            [java.nio ByteBuffer]
            [java.security MessageDigest]
            [org.postgresql.util PGobject]))
@@ -21,6 +21,9 @@
 
 (def non-terminal-statuses
   #{"created" "crawling" "embedding" "verifying"})
+
+(def pruneable-lifecycle-statuses
+  #{"complete" "error" "rejected" "superseded"})
 
 (def default-stale-run-timeout-minutes 360)
 
@@ -221,6 +224,21 @@
   [limit]
   (or limit 10))
 
+(defn- timestamp
+  [instant]
+  (when instant
+    (Timestamp/from instant)))
+
+(defn- require-prune-criteria!
+  [{:keys [keep-last older-than]}]
+  (when-not (or (some? keep-last) (some? older-than))
+    (throw (ex-info "Prune requires --keep-last or --older-than"
+                    {:type :alida.db.postgres/prune-requires-criteria})))
+  (when (and (some? keep-last) (neg-int? keep-last))
+    (throw (ex-info "Prune --keep-last must be zero or greater"
+                    {:type :alida.db.postgres/invalid-prune-keep-last
+                     :keep-last keep-last}))))
+
 (defn insert-chunks!
   [connectable embedding-dimensions run source-cfg document-row chunks]
   (let [table-name (pgvector/dimension-table-name embedding-dimensions)]
@@ -246,6 +264,14 @@
         (jsonb (or heading_path []))
         (jsonb (or metadata {}))]
        jdbc-opts))))
+
+(defn- droppable-run-partition!
+  [connectable embedding-dimensions value]
+  (let [partition-name (pgvector/run-partition-name embedding-dimensions value)]
+    (jdbc/execute! connectable [(format "DROP TABLE IF EXISTS %s" partition-name)])
+    partition-name))
+
+(declare with-index-lock!)
 
 (defn reusable-embeddings
   ([connectable embedding-dimensions index-name embedding-fingerprint content-hashes]
@@ -451,6 +477,80 @@
    connectable
    ["SELECT * FROM alida_reports WHERE run_id = ?" (run-id value)]
    jdbc-opts))
+
+(defn prune-candidate-runs
+  [connectable {:keys [keep-last older-than]}]
+  (require-prune-criteria! {:keep-last keep-last :older-than older-than})
+  (let [older-than (timestamp older-than)]
+    (with-connection
+      connectable
+      (fn [conn]
+        (jdbc/execute!
+         conn
+         ["WITH ranked AS (
+        SELECT r.*,
+               row_number() OVER (
+                 PARTITION BY r.index_name
+                 ORDER BY r.started_at DESC, r.id DESC
+               ) AS index_rank,
+               i.live_run_id,
+               i.previous_live_run_id
+        FROM alida_runs r
+        JOIN alida_indexes i ON i.name = r.index_name
+      )
+      SELECT id, index_name, lifecycle_status, embedding_dimensions, started_at, finished_at
+      FROM ranked
+      WHERE id IS DISTINCT FROM live_run_id
+        AND id IS DISTINCT FROM previous_live_run_id
+        AND lifecycle_status = ANY(?)
+        AND (?::integer IS NULL OR index_rank > ?)
+        AND (?::timestamptz IS NULL OR started_at < ?)
+      ORDER BY index_name, started_at"
+          (text-array conn pruneable-lifecycle-statuses)
+          keep-last
+          keep-last
+          older-than
+          older-than]
+         jdbc-opts)))))
+
+(defn- prune-run!
+  [tx opts run]
+  (let [partition-name (droppable-run-partition!
+                        tx
+                        (:embedding_dimensions run)
+                        (:id run))]
+    (jdbc/execute-one! tx
+                       ["DELETE FROM alida_runs WHERE id = ?" (:id run)]
+                       jdbc-opts)
+    (record-event! tx {:index_name (:index_name run)
+                       :event_type "run-pruned"
+                       :details {:run_id (:id run)
+                                 :lifecycle_status (:lifecycle_status run)
+                                 :embedding_dimensions (:embedding_dimensions run)
+                                 :partition partition-name
+                                 :criteria (select-keys opts [:keep-last :older-than])}})
+    (assoc run :partition partition-name)))
+
+(defn prune-runs!
+  [connectable opts]
+  (require-prune-criteria! opts)
+  (let [index-names (->> (prune-candidate-runs connectable opts)
+                         (map :index_name)
+                         distinct
+                         sort
+                         vec)
+        pruned (mapcat
+                (fn [index-name]
+                  (with-index-lock!
+                    connectable
+                    index-name
+                    #(jdbc/with-transaction [tx connectable]
+                       (->> (prune-candidate-runs tx opts)
+                            (filter (comp #{index-name} :index_name))
+                            (mapv (partial prune-run! tx opts))))))
+                index-names)]
+    {:pruned pruned
+     :pruned_count (count pruned)}))
 
 (defn search-live-chunks
   [connectable embedding-dimensions query-embedding {:keys [index_names limit]}]
