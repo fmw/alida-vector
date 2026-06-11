@@ -1,0 +1,6 @@
+*
+
+!bin/
+!bin/alida-vector
+!target/
+!target/alida-vector.jar
