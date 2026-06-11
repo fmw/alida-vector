@@ -261,6 +261,36 @@
    ["SELECT * FROM alida_run_diffs WHERE run_id = ?" (run-id value)]
    jdbc-opts))
 
+(defn save-deterministic-verification!
+  [connectable value {:keys [provider model deterministic_verdict deterministic_findings]}]
+  (require-verdict! deterministic_verdict)
+  (jdbc/execute-one!
+   connectable
+   ["INSERT INTO alida_verifications
+       (run_id, provider, model, deterministic_verdict, deterministic_findings, raw_response)
+     VALUES (?, ?, ?, ?, ?, ?)
+     ON CONFLICT (run_id) DO UPDATE
+     SET provider = EXCLUDED.provider,
+         model = EXCLUDED.model,
+         deterministic_verdict = EXCLUDED.deterministic_verdict,
+         deterministic_findings = EXCLUDED.deterministic_findings,
+         created_at = now()
+     RETURNING *"
+    (run-id value)
+    (or provider "deterministic")
+    (or model "deterministic-gate")
+    deterministic_verdict
+    (jsonb (or deterministic_findings []))
+    (jsonb {})]
+   jdbc-opts))
+
+(defn get-verification
+  [connectable value]
+  (jdbc/execute-one!
+   connectable
+   ["SELECT * FROM alida_verifications WHERE run_id = ?" (run-id value)]
+   jdbc-opts))
+
 (defn- vector-literal
   [embedding]
   (if (string? embedding)

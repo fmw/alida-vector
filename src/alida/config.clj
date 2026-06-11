@@ -237,6 +237,28 @@
                      :value max-concurrency})))
   index)
 
+(defn- validate-deterministic-thresholds!
+  [config]
+  (let [thresholds (get-in config [:verification :deterministic_thresholds])]
+    (doseq [k [:max_removed_percentage
+              :max_changed_percentage
+              :max_item_failure_percentage
+              :max_empty_or_short_document_percentage]
+            :let [v (get thresholds k)]
+            :when (and (some? v) (not (<= 0.0 v 1.0)))]
+      (throw (ex-info (str "Invalid deterministic threshold " (name k)
+                           ": percentage thresholds must be fractions between 0.0 and 1.0")
+                      {:type :alida.config/invalid-deterministic-threshold
+                       :key k
+                       :value v})))
+    (when-let [v (:max_removed_absolute thresholds)]
+      (when (neg-int? v)
+        (throw (ex-info "Invalid deterministic threshold max_removed_absolute: must be zero or greater"
+                        {:type :alida.config/invalid-deterministic-threshold
+                         :key :max_removed_absolute
+                         :value v})))))
+  config)
+
 (defn- validate-indexes!
   [config]
   (doseq [index (:indexes config)]
@@ -265,6 +287,7 @@
                    validate-schema!
                    validate-storage!
                    validate-vector-dimensions!
+                   validate-deterministic-thresholds!
                    validate-indexes!)]
     (assoc config
            :alida.config/path (str path)
