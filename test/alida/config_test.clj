@@ -722,6 +722,7 @@ indexes:
         denied_urls: [https://example.test/docs/secret]
         denied_url_prefixes: [https://example.test/private/]
         max_concurrency: 7
+        inter_request_delay_ms: 100
         max_sitemap_depth: 5
 ")
       (let [index (-> (config/load-config (.getPath file)) :indexes first)
@@ -733,7 +734,41 @@ indexes:
         (is (= ["https://example.test/docs/"] (-> sources second :allowed_url_prefixes)))
         (is (= ["https://example.test/docs/secret"] (-> sources second :denied_urls)))
         (is (= 7 (-> sources second :max_concurrency)))
+        (is (= 100 (-> sources second :inter_request_delay_ms)))
         (is (= 5 (-> sources second :max_sitemap_depth))))
+      (finally
+        (.delete file)))))
+
+(deftest source-delay-must-be-zero-or-positive
+  (let [file (java.io.File/createTempFile "alida-source-delay" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+  api_key: test-key
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: website
+        type: website
+        sitemap_url: https://example.test/sitemap.xml
+        inter_request_delay_ms: -1
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"inter_request_delay_ms must be zero or positive"
+                            (config/load-config (.getPath file))))
       (finally
         (.delete file)))))
 
