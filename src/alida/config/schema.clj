@@ -29,7 +29,7 @@
 
 (def Embedding
   [:map
-   [:provider [:enum "openai" "azure-openai" "vertex-ai"]]
+   [:provider [:enum "openai" "azure-openai" "vertex-ai" "noop"]]
    [:model {:optional true} :string]
    [:deployment_name {:optional true} :string]
    [:endpoint {:optional true} :string]
@@ -64,10 +64,18 @@
 
 (def Verification
   [:map
-   [:provider [:enum "openai" "azure-openai" "vertex-ai"]]
+   [:enabled {:optional true} :boolean]
+   [:provider {:optional true} [:enum "openai" "azure-openai" "vertex-ai"]]
    [:model {:optional true} :string]
    [:deployment_name {:optional true} :string]
+   [:endpoint {:optional true} :string]
+   [:api_version {:optional true} :string]
+   [:project {:optional true} :string]
+   [:location {:optional true} :string]
+   [:credentials_path {:optional true} :string]
+   [:access_token {:optional true} :string]
    [:api_key {:optional true} :string]
+   [:max_prompt_tokens {:optional true} :int]
    [:prompt_policy_version {:optional true} :string]
    [:deterministic_gate_version {:optional true} :string]
    [:deterministic_thresholds {:optional true} DeterministicThresholds]])

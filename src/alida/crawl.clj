@@ -293,13 +293,14 @@
       (persist-source! tx run index-cfg structural-config-hash source-result))))
 
 (defn- crawl-summary
-  [run source-results embedding-stats phase-stats run-diff deterministic-verification]
+  [run source-results embedding-stats phase-stats run-diff deterministic-verification verification]
   {:run_id (:id run)
    :index_name (:index_name run)
    :lifecycle_status (:lifecycle_status run)
    :verification_verdict (:verification_verdict run)
    :diff run-diff
    :deterministic_verification deterministic-verification
+   :verification verification
    :source_count (count source-results)
    :document_count (reduce + 0 (map :document_count source-results))
    :chunk_count (reduce + 0 (map :chunk_count source-results))
@@ -316,6 +317,89 @@
                                    :crawl_stats
                                    :embedding_stats])
                   source-results)})
+
+(defn- document-key
+  [document]
+  [(:source_id document) (:canonical_url document)])
+
+(defn- verification-chunk
+  [chunk]
+  (select-keys chunk [:chunk_index :chunk_count :heading_path :content :content_hash :estimated_tokens]))
+
+(defn- verification-document
+  [{:keys [document chunks]}]
+  (assoc (select-keys document [:source_id :canonical_url :title :locale :normalized_content_hash])
+         :chunks (mapv verification-chunk chunks)))
+
+(defn- current-diff-keys
+  [run-diff]
+  (let [added (map document-key (:added_urls run-diff))
+        changed (map document-key (:changed_urls run-diff))
+        moved (map (fn [entry] [(:source_id entry) (:current_canonical_url entry)])
+                   (:moved_urls run-diff))]
+    (set (concat added changed moved))))
+
+(defn- verification-documents
+  [source-results run-diff]
+  (let [wanted (current-diff-keys run-diff)]
+    (->> source-results
+         (mapcat :documents)
+         (filter #(contains? wanted (document-key (:document %))))
+         (mapv verification-document))))
+
+(defn- verifier-model
+  [verification-cfg]
+  (or (:model verification-cfg)
+      (:deployment_name verification-cfg)
+      (:provider verification-cfg)))
+
+(defn- llm-verification-enabled?
+  [verification-cfg]
+  (not= false (:enabled verification-cfg)))
+
+(defn- combined-llm-result
+  [results]
+  {:verdict (apply verify/strictest-verdict (map :verdict results))
+   :reasoning (str/join "\n\n" (keep :reasoning results))
+   :findings (vec (mapcat #(or (:findings %) []) results))
+   :security_findings (vec (mapcat #(or (:security_findings %) []) results))
+   :raw_response {:batches (mapv :raw_response results)}})
+
+(defn- verify-run!
+  [sys ds run run-diff deterministic-verification source-results]
+  (let [verification-cfg (:verification (:alida/config sys))
+        llm-result (when (llm-verification-enabled? verification-cfg)
+                     (let [prompts (verify/build-prompts
+                                    {:run_id (:id run)
+                                     :index_name (:index_name run)
+                                     :deterministic_verification deterministic-verification
+                                     :diff run-diff
+                                     :documents (verification-documents source-results run-diff)
+                                     :max_prompt_tokens (:max_prompt_tokens verification-cfg)})]
+                       (combined-llm-result
+                        (mapv #(verify/complete sys verification-cfg %) prompts))))
+        final-verdict (if llm-result
+                        (verify/strictest-verdict
+                         (:deterministic_verdict deterministic-verification)
+                         (:verdict llm-result))
+                        (:deterministic_verdict deterministic-verification))
+        verification (merge
+                      {:provider (if llm-result (:provider verification-cfg) "disabled")
+                       :model (if llm-result (verifier-model verification-cfg) "llm-verification-disabled")
+                       :deterministic_verdict (:deterministic_verdict deterministic-verification)
+                       :deterministic_findings (:deterministic_findings deterministic-verification)
+                       :final_verdict final-verdict
+                       :reasoning (if llm-result
+                                    (:reasoning llm-result)
+                                    "LLM verification was disabled by config.")
+                       :raw_response (if llm-result
+                                       (:raw_response llm-result)
+                                       {:llm_verification_enabled false})}
+                      (when llm-result
+                        {:llm_verdict (:verdict llm-result)
+                         :llm_security_findings (:security_findings llm-result)}))]
+    (db/save-verification! ds (:id run) verification)
+    verification))
 
 (defn- fail-run!
   [ds run e]
@@ -347,7 +431,9 @@
             run (db/create-run! ds
                                 index-cfg
                                 structural-config-hash
-                                {:embedding_fingerprint (embed/fingerprint (:embedding index-cfg))})]
+                                {:embedding_fingerprint (embed/fingerprint (:embedding index-cfg))
+                                 :embedding_provider (get-in index-cfg [:embedding :provider])
+                                 :embedding_disabled (= "noop" (get-in index-cfg [:embedding :provider]))})]
         (try
           (db/update-run-status! ds (:id run) "crawling")
           (let [crawl-started (now-ns)
@@ -361,18 +447,24 @@
                   persist-started (now-ns)]
               (persist-results! ds run index-cfg structural-config-hash source-results)
               (let [persist-duration-ms (elapsed-ms persist-started)
-                    phase-stats (merge crawl-stats
-                                       {:crawl_duration_ms crawl-duration-ms
-                                        :embedding_duration_ms (:duration_ms stats)
-                                        :persist_duration_ms persist-duration-ms})
-                    completed (db/update-run-status!
+                    phase-stats-before-verification (merge crawl-stats
+                                                           {:crawl_duration_ms crawl-duration-ms
+                                                            :embedding_duration_ms (:duration_ms stats)
+                                                            :persist_duration_ms persist-duration-ms})
+                    verifying (db/update-run-status!
                                ds
                                (:id run)
-                               "complete"
+                               "verifying"
                                {:metadata {:embedding_stats stats
-                                           :phase_stats phase-stats}})
-                    run-diff (compute-and-save-diff! ds completed)
-                    partial-summary (crawl-summary completed source-results stats phase-stats run-diff nil)
+                                           :phase_stats phase-stats-before-verification}})
+                    run-diff (compute-and-save-diff! ds verifying)
+                    partial-summary (crawl-summary verifying
+                                                   source-results
+                                                   stats
+                                                   phase-stats-before-verification
+                                                   run-diff
+                                                   nil
+                                                   nil)
                     deterministic-verification (verify/deterministic-gate
                                                 (:verification (:alida/config sys))
                                                 partial-summary
@@ -384,12 +476,35 @@
                               :provider "deterministic"
                               :model (or (get-in sys [:alida/config :verification :deterministic_gate_version])
                                          "deterministic-gate")))
-                    summary (crawl-summary completed
+                    verification-started (now-ns)
+                    verification (verify-run! sys
+                                              ds
+                                              verifying
+                                              run-diff
+                                              deterministic-verification
+                                              source-results)
+                    phase-stats (assoc phase-stats-before-verification
+                                       :verification_duration_ms (elapsed-ms verification-started))
+                    completed (db/update-run-status!
+                               ds
+                               (:id run)
+                               "complete"
+                               {:verification_verdict (:final_verdict verification)
+                                :metadata {:embedding_stats stats
+                                           :phase_stats phase-stats}})
+                    action (run/decide-action index-cfg
+                                              {:final_verdict (:final_verdict verification)
+                                               :first_run (nil? (:previous_run_id run-diff))})
+                    final-run (if (= :activate action)
+                                (db/activate-run! ds (:id completed))
+                                completed)
+                    summary (crawl-summary final-run
                                            source-results
                                            stats
                                            phase-stats
                                            run-diff
-                                           deterministic-verification)]
+                                           deterministic-verification
+                                           verification)]
                 (db/save-report! ds (:id run) (report/build summary))
                 summary)))
           (catch Exception e

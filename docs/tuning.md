@@ -1,0 +1,130 @@
+# Crawl Tuning
+
+Before using Alida Vector for a production refresh, it is usually worth tuning the crawl configuration. The goal is to make sure the crawler indexes useful content and avoids navigation, footers, duplicate pages, forms, cookie banners, search pages, and other boilerplate.
+
+During this tuning phase, you can save time and API cost by disabling paid embedding and LLM verification calls. This should be temporary: for production refreshes, keep real embeddings and LLM verification enabled. Even trusted sources can change unexpectedly or be compromised.
+
+## Disable Costly API Calls
+
+Use the `noop` embedding provider while tuning extraction. It stores placeholder vectors with the configured dimensions, so the normal crawl, storage, diff, and report paths still run. Runs created this way cannot be activated.
+
+Disable LLM verification with `verification.enabled: false`. The deterministic gate still runs and is stored, but no LLM API call is made.
+
+```yaml
+verification:
+  enabled: false
+  deterministic_thresholds:
+    max_removed_absolute: 25
+    max_removed_percentage: 0.2
+    max_changed_percentage: 0.5
+    max_item_failure_percentage: 0.05
+    max_empty_or_short_document_percentage: 0.05
+
+indexes:
+  - name: docs-tuning
+    auto_activate: false
+    embedding:
+      provider: noop
+      embedding_dimensions: 1536
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: website
+        type: website
+        sitemap_url: https://example.com/sitemap.xml
+```
+
+Run the crawl as usual:
+
+```bash
+alida-vector crawl --config config.yml --index docs-tuning
+alida-vector report <run-id>
+```
+
+## Blacklist Low-Value URLs
+
+Use `denied_urls` for exact URLs that should never be indexed. Use `denied_url_prefixes` for groups of pages, such as internal search results, account flows, thank-you pages, or duplicate archive pages.
+
+```yaml
+sources:
+  - id: website
+    type: website
+    sitemap_url: https://example.com/sitemap.xml
+    allowed_url_prefixes:
+      - https://example.com/docs/
+      - https://example.com/blog/
+    denied_urls:
+      - https://example.com/docs/not-for-indexing/
+      - https://example.com/blog/subscribed/
+    denied_url_prefixes:
+      - https://example.com/search/
+      - https://example.com/account/
+      - https://example.com/thank-you/
+```
+
+Prefer blacklisting pages that are clearly not useful for retrieval. Do not use broad prefixes until you have checked that they do not remove valuable content.
+
+## Strip Page Chrome and Boilerplate
+
+Use `remove_selectors` to remove HTML elements before text extraction. This is best for navigation, footers, cookie banners, forms, sidebars, and other repeated page chrome.
+
+```yaml
+sources:
+  - id: website
+    type: website
+    sitemap_url: https://example.com/sitemap.xml
+    remove_selectors:
+      - header
+      - footer
+      - nav
+      - form
+      - aside
+      - "[role=navigation]"
+      - ".cookie-banner"
+      - ".newsletter-signup"
+      - ".site-search"
+      - ".language-switcher"
+```
+
+Use `strip_text` for repeated text fragments that survive selector cleanup. Keep these entries specific enough that they cannot remove useful article text by accident.
+
+```yaml
+sources:
+  - id: website
+    type: website
+    sitemap_url: https://example.com/sitemap.xml
+    strip_text:
+      - "Subscribe to our newsletter"
+      - "Did this article help? Yes No"
+      - "This site uses cookies"
+```
+
+A practical workflow is:
+
+1. Crawl with `provider: noop` and `verification.enabled: false`.
+2. Read the crawl report and inspect representative chunks.
+3. Add blacklist rules for pages that should not be indexed.
+4. Add `remove_selectors` for structural boilerplate.
+5. Add `strip_text` only for repeated text that cannot be removed structurally.
+6. Repeat until chunks contain coherent, useful content.
+7. Switch back to a real embedding provider and enable LLM verification for the production run.
+
+## Clean Up Tuning Runs
+
+Tuning runs with noop embeddings are disposable. They use placeholder vectors and cannot be activated, but they still create run, document, chunk, report, and event rows.
+
+After tuning, prune these runs:
+
+```bash
+alida-vector prune --config config.yml --disabled-embeddings
+```
+
+You can combine this with normal pruning criteria:
+
+```bash
+alida-vector prune --config config.yml --disabled-embeddings --older-than 7d
+```
+
+The prune command protects live runs, previous live runs, and in-progress runs. For disabled-embedding tuning runs, it removes the run data and drops the per-run vector partition.

@@ -3,4 +3,5 @@
 /.clj-kondo/.cache/
 /.nrepl-port
 /alida.yml
+/config/
 /service-account.json

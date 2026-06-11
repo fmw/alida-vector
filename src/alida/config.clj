@@ -86,8 +86,12 @@
 
 (def required-verification-keys
   {"openai" [:model :api_key]
-   "azure-openai" [:deployment_name :api_key]
-   "vertex-ai" [:model]})
+   "azure-openai" [:endpoint :deployment_name :api_key]
+   "vertex-ai" [:project :location :model]})
+
+(defn- verification-enabled?
+  [verification]
+  (not= false (:enabled verification)))
 
 (defn- validate-required-embedding-keys!
   [index]
@@ -107,16 +111,32 @@
 (defn- validate-required-verification-keys!
   [config]
   (let [verification (:verification config)
+        provider (:provider verification)
         required-keys (required-verification-keys (:provider verification))]
-    (doseq [k required-keys
-            :when (nil? (get verification k))]
-      (throw (ex-info (str "Invalid verification config: provider "
-                           (:provider verification)
-                           " requires "
-                           (name k))
-                      {:type :alida.config/missing-verification-provider-config
-                       :provider (:provider verification)
-                       :key k}))))
+    (when (verification-enabled? verification)
+      (when-not provider
+        (throw (ex-info "Invalid verification config: provider is required when verification is enabled"
+                        {:type :alida.config/missing-verification-provider-config
+                         :key :provider})))
+      (doseq [k required-keys
+              :when (nil? (get verification k))]
+        (throw (ex-info (str "Invalid verification config: provider "
+                             (:provider verification)
+                             " requires "
+                             (name k))
+                        {:type :alida.config/missing-verification-provider-config
+                         :provider (:provider verification)
+                         :key k})))))
+  config)
+
+(defn- validate-verification-options!
+  [config]
+  (let [max-prompt-tokens (get-in config [:verification :max_prompt_tokens])]
+    (when (and (some? max-prompt-tokens) (not (pos-int? max-prompt-tokens)))
+      (throw (ex-info "Invalid verification config: max_prompt_tokens must be positive"
+                      {:type :alida.config/invalid-verification-provider-config
+                       :key :max_prompt_tokens
+                       :value max-prompt-tokens}))))
   config)
 
 (defn- validate-positive-embedding-options!
@@ -309,6 +329,7 @@
                    validate-vector-dimensions!
                    validate-deterministic-thresholds!
                    validate-required-verification-keys!
+                   validate-verification-options!
                    validate-indexes!)]
     (assoc config
            :alida.config/path (str path)

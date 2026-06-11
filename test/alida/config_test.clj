@@ -195,6 +195,38 @@ indexes:
       (finally
         (.delete file)))))
 
+(deftest noop-embedding-provider-does-not-require-provider-secrets
+  (let [file (java.io.File/createTempFile "alida-noop-embedding-provider" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+  api_key: test-key
+indexes:
+  - name: docs
+    embedding:
+      provider: noop
+      embedding_dimensions: 1536
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (= "noop"
+             (-> (config/load-config (.getPath file))
+                 :indexes
+                 first
+                 :embedding
+                 :provider)))
+      (finally
+        (.delete file)))))
+
 (deftest openai-verification-api-key-is-required
   (let [file (java.io.File/createTempFile "alida-openai-verification-provider" ".yml")]
     (try
@@ -222,6 +254,99 @@ indexes:
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"provider openai requires api_key"
                             (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest azure-openai-verification-endpoint-is-required
+  (let [file (java.io.File/createTempFile "alida-azure-openai-verification-provider" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: azure-openai
+  deployment_name: gpt-5.1
+  api_key: test-key
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"provider azure-openai requires endpoint"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest vertex-ai-verification-project-is-required
+  (let [file (java.io.File/createTempFile "alida-vertex-ai-verification-provider" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: vertex-ai
+  location: europe-west4
+  model: gemini-2.5-flash-lite
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"provider vertex-ai requires project"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest disabled-llm-verification-does-not-require-provider-secrets
+  (let [file (java.io.File/createTempFile "alida-disabled-verification" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  enabled: false
+  deterministic_thresholds:
+    max_item_failure_percentage: 0.1
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (false? (-> (config/load-config (.getPath file))
+                      :verification
+                      :enabled)))
       (finally
         (.delete file)))))
 
@@ -351,6 +476,38 @@ indexes:
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"max_removed_absolute"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest verification-max-prompt-tokens-must-be-positive
+  (let [file (java.io.File/createTempFile "alida-verification-options" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+  api_key: test-key
+  max_prompt_tokens: 0
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: site
+        type: website
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"max_prompt_tokens must be positive"
                             (config/load-config (.getPath file))))
       (finally
         (.delete file)))))

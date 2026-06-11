@@ -13,13 +13,17 @@
   [summary]
   (or (get-in summary [:deterministic_verification :deterministic_verdict]) "-"))
 
+(defn- llm-verdict
+  [summary]
+  (or (get-in summary [:verification :llm_verdict]) "-"))
+
 (defn- diff-count
   [summary k]
   (get-in summary [:diff :summary k] 0))
 
 (defn slack-summary
   [{:keys [run_id index_name document_count chunk_count error_count embedding_stats phase_stats] :as summary}]
-  (format "%s run %s: documents=%s, chunks=%s, errors=%s, added=%s, removed=%s, changed=%s, moved=%s, reused=%s, embedded=%s, crawl_ms=%s, deterministic=%s, verdict=%s"
+  (format "%s run %s: documents=%s, chunks=%s, errors=%s, added=%s, removed=%s, changed=%s, moved=%s, reused=%s, embedded=%s, crawl_ms=%s, deterministic=%s, llm=%s, verdict=%s"
           index_name
           run_id
           (value document_count)
@@ -33,6 +37,7 @@
           (value (:embedded_chunk_count embedding_stats))
           (value (:crawl_duration_ms phase_stats))
           (deterministic-verdict summary)
+          (llm-verdict summary)
           (verdict summary)))
 
 (defn- source-line
@@ -77,9 +82,13 @@
   [entry]
   (str "- " (:check entry) " " (:verdict entry) ": " (:message entry)))
 
+(defn- finding-line
+  [entry]
+  (str "- " entry))
+
 (defn full-report
   [{:keys [run_id index_name lifecycle_status source_count document_count chunk_count error_count
-           embedding_stats phase_stats sources diff deterministic_verification]
+           embedding_stats phase_stats sources diff deterministic_verification verification]
     :as summary}]
   (str/join
    "\n\n"
@@ -101,6 +110,13 @@
             (section "Deterministic Findings"
                      (map deterministic-finding-line
                           (:deterministic_findings deterministic_verification)))
+            (str/join
+             \newline
+             ["LLM Verification"
+              (str "verdict: " (llm-verdict summary))
+              (str "reasoning: " (or (:reasoning verification) "-"))])
+            (section "LLM Security Findings"
+                     (map finding-line (:llm_security_findings verification)))
             (str/join
              \newline
              ["Diff"
