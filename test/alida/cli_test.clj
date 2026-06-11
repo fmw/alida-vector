@@ -2,6 +2,7 @@
   (:require [alida.cli :as cli]
             [alida.crawl :as crawl]
             [alida.db.postgres :as db]
+            [alida.search :as search]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [integrant.core :as ig]))
@@ -139,6 +140,44 @@
           (is (= "No report found for run 018c9099-041d-7f5b-9b65-5b8f08f8e61d."
                  (:message result))))))))
 
+(deftest search-command-prints-live-results
+  (with-system-stub
+    (fn []
+      (with-redefs [db/datasource (fn [_]
+                                    (reify java.io.Closeable
+                                      (close [_] nil)))
+                    search/search-live (fn [sys _ query opts]
+                                         (is (= test-system sys))
+                                         (is (= "vacation balance" query))
+                                         (is (= {:index-name "docs" :limit 3} opts))
+                                         [{:score 0.87654
+                                           :index_name "docs"
+                                           :source_id "website"
+                                           :canonical_url "https://example.test/docs"
+                                           :title "Docs"
+                                           :locale "en"
+                                           :content "A matching document"}])]
+        (let [result (cli/run ["search" "vacation" "balance" "--config" "ignored.yml" "--index" "docs" "--limit" "3"])]
+          (is (= 0 (:exit-code result)))
+          (is (str/includes? (:message result) "0.8765"))
+          (is (str/includes? (:message result) "https://example.test/docs"))
+          (is (str/includes? (:message result) "A matching document")))))))
+
+(deftest search-run-command-prints-run-results
+  (with-system-stub
+    (fn []
+      (with-redefs [db/datasource (fn [_]
+                                    (reify java.io.Closeable
+                                      (close [_] nil)))
+                    search/search-run (fn [_ _ run-id query opts]
+                                        (is (= "018c9099-041d-7f5b-9b65-5b8f08f8e61d" run-id))
+                                        (is (= "support article" query))
+                                        (is (= {:limit nil} opts))
+                                        [])]
+        (let [result (cli/run ["search-run" "018c9099-041d-7f5b-9b65-5b8f08f8e61d" "support" "article"])]
+          (is (= 0 (:exit-code result)))
+          (is (= "No results found." (:message result))))))))
+
 (deftest migrate-command-calls-db-layer
   (with-system-stub
     (fn []
@@ -188,9 +227,6 @@
 (deftest stubbed-commands-validate-arguments-before-returning-not-implemented
   (with-system-stub
     (fn []
-      (let [search-result (cli/run ["search" "hello"])
-            search-run-result (cli/run ["search-run" "018c9099-041d-7f5b-9b65-5b8f08f8e61d" "hello"])]
-        (is (= 2 (:exit-code search-result)))
-        (is (= "Command 'search' is wired but not implemented yet." (:message search-result)))
-        (is (= 2 (:exit-code search-run-result)))
-        (is (= "Command 'search-run' is wired but not implemented yet." (:message search-run-result)))))))
+      (let [result (cli/run ["prune"])]
+        (is (= 2 (:exit-code result)))
+        (is (= "Command 'prune' is wired but not implemented yet." (:message result)))))))

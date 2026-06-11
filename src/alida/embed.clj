@@ -1,5 +1,6 @@
 (ns alida.embed
   (:require [clojure.data.json :as json]
+            [alida.text :as text]
             [hato.client :as http])
   (:import [java.io IOException]
            [java.time Instant ZonedDateTime]
@@ -23,6 +24,20 @@
   (throw (ex-info (str "Unsupported embedding provider: " (:provider provider-cfg))
                   {:type :alida.embed/unsupported-provider
                    :provider (:provider provider-cfg)})))
+
+(defn fingerprint
+  [provider-cfg]
+  (-> provider-cfg
+      (select-keys [:provider
+                    :model
+                    :deployment_name
+                    :endpoint
+                    :api_version
+                    :project
+                    :location
+                    :embedding_dimensions])
+      pr-str
+      text/sha-256))
 
 (defn require-config!
   [provider-cfg k]
