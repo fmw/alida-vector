@@ -23,15 +23,15 @@
   [status]
   (<= 200 status 299))
 
-(defn post-text!
-  [sys text]
+(defn post-payload!
+  [sys payload]
   (if-let [url (webhook-url sys)]
     (try
       (let [response (request! sys
                                {:method :post
                                 :url url
                                 :headers {"Content-Type" "application/json"}
-                                :body (json/write-str {:text text})})
+                                :body (json/write-str payload)})
             status (:status response)]
         (if (successful-status? status)
           {:sent true
@@ -47,6 +47,12 @@
      :skipped true
      :reason :not-configured}))
 
+(defn post-text!
+  [sys text]
+  (post-payload! sys {:text text}))
+
 (defn post-report!
-  [sys {:keys [slack_summary]}]
-  (post-text! sys slack_summary))
+  [sys {:keys [slack_summary slack_blocks]}]
+  (post-payload! sys
+                 (cond-> {:text slack_summary}
+                   (seq slack_blocks) (assoc :blocks slack_blocks))))

@@ -64,6 +64,20 @@
     (is (str/includes? (:slack_summary built) "deterministic=caution"))
     (is (str/includes? (:slack_summary built) "verdict=-"))))
 
+(deftest builds-slack-blocks
+  (let [blocks (:slack_blocks (report/build (assoc summary
+                                                   :verification_verdict "caution"
+                                                   :verification {:llm_verdict "caution"})))]
+    (is (= "header" (:type (first blocks))))
+    (is (= "Alida Vector: docs crawl CAUTION"
+           (get-in (first blocks) [:text :text])))
+    (is (some #(str/includes? % "Final verdict")
+              (mapcat (fn [block] (map :text (:fields block))) blocks)))
+    (is (some #(str/includes? % "Added")
+              (mapcat (fn [block] (map :text (:fields block))) blocks)))
+    (is (some #(str/includes? % "activate")
+              (mapcat (fn [block] (map :text (:elements block))) blocks)))))
+
 (deftest builds-full-report
   (let [full-report (:full_report (report/build summary))]
     (is (str/includes? full-report "Run: 018c9099-041d-7f5b-9b65-5b8f08f8e61d"))

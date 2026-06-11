@@ -299,8 +299,10 @@
         (is (str/includes? (get-in result [:report :slack_summary])
                            "support-knowledge-base run"))
         (is (= 1 (count (:slack-requests result))))
-        (is (= {"text" (get-in result [:report :slack_summary])}
-               (json/read-str (:body (first (:slack-requests result))))))
+        (let [payload (json/read-str (:body (first (:slack-requests result))))]
+          (is (= (get-in result [:report :slack_summary])
+                 (get payload "text")))
+          (is (seq (get payload "blocks"))))
         (is (str/includes? (get-in result [:report :full_report])
                            "Documents: 1"))
         (is (= 1 (get-in result [:summary :document_count])))

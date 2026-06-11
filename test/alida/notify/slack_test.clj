@@ -18,13 +18,19 @@
                                        (swap! requests conj request)
                                        {:status 200
                                         :body "ok"})}
-                {:slack_summary "run summary"})]
+                {:slack_summary "run summary"
+                 :slack_blocks [{:type "section"
+                                 :text {:type "mrkdwn"
+                                        :text "Pretty summary"}}]})]
     (is (= {:sent true
             :status 200}
            result))
     (is (= :post (:method (first @requests))))
     (is (= "https://example.test/slack" (:url (first @requests))))
-    (is (= {"text" "run summary"}
+    (is (= {"text" "run summary"
+            "blocks" [{"type" "section"
+                       "text" {"type" "mrkdwn"
+                               "text" "Pretty summary"}}]}
            (json/read-str (:body (first @requests)))))))
 
 (deftest post-report-returns-failure-for-non-success-status

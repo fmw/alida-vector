@@ -21,6 +21,10 @@
   [summary k]
   (get-in summary [:diff :summary k] 0))
 
+(defn- ms
+  [phase-stats k]
+  (value (get phase-stats k)))
+
 (defn slack-summary
   [{:keys [run_id index_name document_count chunk_count error_count embedding_stats phase_stats] :as summary}]
   (format "%s run %s: documents=%s, chunks=%s, errors=%s, added=%s, removed=%s, changed=%s, moved=%s, reused=%s, embedded=%s, crawl_ms=%s, deterministic=%s, llm=%s, verdict=%s"
@@ -39,6 +43,92 @@
           (deterministic-verdict summary)
           (llm-verdict summary)
           (verdict summary)))
+
+(defn- slack-escape
+  [value]
+  (-> (str value)
+      (str/replace "&" "&amp;")
+      (str/replace "<" "&lt;")
+      (str/replace ">" "&gt;")))
+
+(defn- truncate
+  [value max-length]
+  (let [value (str value)]
+    (if (<= (count value) max-length)
+      value
+      (str (subs value 0 (- max-length 3)) "..."))))
+
+(defn- field
+  [label value]
+  {:type "mrkdwn"
+   :text (str "*" label "*\n" (slack-escape value))})
+
+(defn- command
+  [& parts]
+  (str "`" (str/join " " parts) "`"))
+
+(defn- action-line
+  [{:keys [run_id diff] :as summary}]
+  (let [first-run? (nil? (:previous_run_id diff))
+        final-verdict (verdict summary)]
+    (cond
+      (and first-run? (= "pass" final-verdict))
+      (str "First run. Review the report, then activate manually with "
+           (command "alida-vector" "activate" run_id) ".")
+
+      (= "caution" final-verdict)
+      (str "Review required. Inspect with "
+           (command "alida-vector" "report" run_id)
+           ", then activate with "
+           (command "alida-vector" "activate" run_id "--allow-caution")
+           " or reject with "
+           (command "alida-vector" "reject" run_id)
+           ".")
+
+      (= "fail" final-verdict)
+      (str "Verification failed. Inspect with "
+           (command "alida-vector" "report" run_id)
+           " and reject with "
+           (command "alida-vector" "reject" run_id)
+           ".")
+
+      :else
+      (str "Inspect the full report with "
+           (command "alida-vector" "report" run_id)
+           "."))))
+
+(defn slack-blocks
+  [{:keys [run_id index_name lifecycle_status document_count chunk_count error_count
+           embedding_stats phase_stats] :as summary}]
+  [{:type "header"
+    :text {:type "plain_text"
+           :text (truncate (format "Alida Vector: %s crawl %s"
+                                   index_name
+                                   (str/upper-case (verdict summary)))
+                           150)}}
+   {:type "section"
+    :fields [(field "Run" (command run_id))
+             (field "Status" (or lifecycle_status "-"))
+             (field "Final verdict" (verdict summary))
+             (field "LLM verdict" (llm-verdict summary))]}
+   {:type "section"
+    :fields [(field "Documents" (value document_count))
+             (field "Chunks" (value chunk_count))
+             (field "Errors" (value error_count))
+             (field "Deterministic" (deterministic-verdict summary))]}
+   {:type "section"
+    :fields [(field "Added" (diff-count summary :added_count))
+             (field "Removed" (diff-count summary :removed_count))
+             (field "Changed" (diff-count summary :changed_count))
+             (field "Moved" (diff-count summary :moved_count))]}
+   {:type "section"
+    :fields [(field "Reused chunks" (value (:reused_chunk_count embedding_stats)))
+             (field "Embedded chunks" (value (:embedded_chunk_count embedding_stats)))
+             (field "Embedding requests" (value (:embedding_request_count embedding_stats)))
+             (field "Crawl time" (str (ms phase_stats :crawl_duration_ms) " ms"))]}
+   {:type "context"
+    :elements [{:type "mrkdwn"
+                :text (slack-escape (action-line summary))}]}])
 
 (defn- source-line
   [{:keys [source_cfg document_count chunk_count error_count crawl_stats embedding_stats]}]
@@ -152,4 +242,5 @@
 (defn build
   [summary]
   {:slack_summary (slack-summary summary)
+   :slack_blocks (slack-blocks summary)
    :full_report (full-report summary)})
