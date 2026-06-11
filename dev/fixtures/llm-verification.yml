@@ -1,0 +1,71 @@
+database:
+  jdbc_url: ${ALIDA_DATABASE_URL}
+  user: ${ALIDA_DATABASE_USER}
+  password: ${ALIDA_DATABASE_PASSWORD}
+
+storage:
+  metadata:
+    type: postgres
+    jdbc_url: ${ALIDA_DATABASE_URL}
+    user: ${ALIDA_DATABASE_USER}
+    password: ${ALIDA_DATABASE_PASSWORD}
+  vectors:
+    type: pgvector
+
+verification:
+  enabled: true
+  provider: openai
+  model: gpt-4.1-mini
+  api_key: ${OPENAI_API_KEY}
+  max_prompt_tokens: 12000
+  prompt_policy_version: "dev-fixture-2026-06-11"
+  deterministic_gate_version: "dev-fixture-2026-06-11"
+  deterministic_thresholds:
+    max_removed_absolute: 25
+    max_removed_percentage: 0.2
+    max_changed_percentage: 0.5
+    max_item_failure_percentage: 0.05
+    max_empty_or_short_document_percentage: 0.05
+
+# To test Azure OpenAI, replace verification with:
+# verification:
+#   enabled: true
+#   provider: azure-openai
+#   endpoint: ${AZURE_OPENAI_ENDPOINT}
+#   deployment_name: ${AZURE_OPENAI_DEPLOYMENT}
+#   api_version: "2024-12-01-preview"
+#   api_key: ${AZURE_OPENAI_API_KEY}
+#
+# To test Vertex AI, replace verification with:
+# verification:
+#   enabled: true
+#   provider: vertex-ai
+#   project: ${VERTEX_AI_PROJECT}
+#   location: ${VERTEX_AI_LOCATION}
+#   model: gemini-2.5-flash-lite
+#   credentials_path: ${GOOGLE_APPLICATION_CREDENTIALS}
+
+notifications:
+  slack_webhook_url: https://example.test/slack
+
+indexes:
+  - name: llm-verification-fixture
+    auto_activate: false
+    languages:
+      allowed: [en]
+      fallback: en
+    embedding:
+      provider: noop
+      embedding_dimensions: 1536
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 2000
+      safety_multiplier: 1.2
+    sources:
+      - id: fixture
+        type: website
+        sitemap_url: http://127.0.0.1:18181/sitemap.xml
+        allowed_url_prefixes:
+          - http://127.0.0.1:18181/docs/
+        language:
+          mode: html
