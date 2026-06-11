@@ -411,6 +411,29 @@
          limit])
       jdbc-opts))))
 
+(defn save-report!
+  [connectable value {:keys [slack_summary full_report]}]
+  (jdbc/execute-one!
+   connectable
+   ["INSERT INTO alida_reports (run_id, slack_summary, full_report)
+     VALUES (?, ?, ?)
+     ON CONFLICT (run_id) DO UPDATE
+     SET slack_summary = EXCLUDED.slack_summary,
+         full_report = EXCLUDED.full_report,
+         created_at = now()
+     RETURNING *"
+    (run-id value)
+    slack_summary
+    full_report]
+   jdbc-opts))
+
+(defn get-report
+  [connectable value]
+  (jdbc/execute-one!
+   connectable
+   ["SELECT * FROM alida_reports WHERE run_id = ?" (run-id value)]
+   jdbc-opts))
+
 (defn activate-run!
   ([connectable value]
    (activate-run! connectable value {}))

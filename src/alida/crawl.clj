@@ -4,6 +4,7 @@
             [alida.embed :as embed]
             [alida.extract.html :as html]
             [alida.lang :as lang]
+            [alida.report :as report]
             [alida.run :as run]
             [alida.source :as source]
             [alida.text :as text]
@@ -364,8 +365,10 @@
                                (:id run)
                                "complete"
                                {:metadata {:embedding_stats stats
-                                           :phase_stats phase-stats}})]
-                (crawl-summary completed source-results stats phase-stats))))
+                                           :phase_stats phase-stats}})
+                    summary (crawl-summary completed source-results stats phase-stats)]
+                (db/save-report! ds (:id run) (report/build summary))
+                summary)))
           (catch Exception e
             (throw (ex-info (or (ex-message e) "Crawl failed")
                             (assoc (or (ex-data e) {})

@@ -114,6 +114,31 @@
             (is (= 0 (:exit-code result)))
             (is (= "Rolled back index docs." (:message result)))))))))
 
+(deftest report-command-prints-stored-report
+  (with-system-stub
+    (fn []
+      (with-redefs [db/datasource (fn [_]
+                                    (reify java.io.Closeable
+                                      (close [_] nil)))
+                    db/get-report (fn [_ run-id]
+                                    (is (= "018c9099-041d-7f5b-9b65-5b8f08f8e61d" run-id))
+                                    {:full_report "Run report"})]
+        (let [result (cli/run ["report" "018c9099-041d-7f5b-9b65-5b8f08f8e61d"])]
+          (is (= 0 (:exit-code result)))
+          (is (= "Run report" (:message result))))))))
+
+(deftest report-command-handles-missing-report
+  (with-system-stub
+    (fn []
+      (with-redefs [db/datasource (fn [_]
+                                    (reify java.io.Closeable
+                                      (close [_] nil)))
+                    db/get-report (fn [_ _] nil)]
+        (let [result (cli/run ["report" "018c9099-041d-7f5b-9b65-5b8f08f8e61d"])]
+          (is (= 1 (:exit-code result)))
+          (is (= "No report found for run 018c9099-041d-7f5b-9b65-5b8f08f8e61d."
+                 (:message result))))))))
+
 (deftest migrate-command-calls-db-layer
   (with-system-stub
     (fn []
@@ -163,11 +188,8 @@
 (deftest stubbed-commands-validate-arguments-before-returning-not-implemented
   (with-system-stub
     (fn []
-      (let [report-result (cli/run ["report" "018c9099-041d-7f5b-9b65-5b8f08f8e61d"])
-            search-result (cli/run ["search" "hello"])
+      (let [search-result (cli/run ["search" "hello"])
             search-run-result (cli/run ["search-run" "018c9099-041d-7f5b-9b65-5b8f08f8e61d" "hello"])]
-        (is (= 2 (:exit-code report-result)))
-        (is (= "Command 'report' is wired but not implemented yet." (:message report-result)))
         (is (= 2 (:exit-code search-result)))
         (is (= "Command 'search' is wired but not implemented yet." (:message search-result)))
         (is (= 2 (:exit-code search-run-result)))
