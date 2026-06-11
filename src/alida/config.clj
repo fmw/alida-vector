@@ -277,6 +277,20 @@
                      :value max-concurrency})))
   index)
 
+(defn- validate-source-delay!
+  [index]
+  (doseq [source (:sources index)
+          :let [delay-ms (:inter_request_delay_ms source)]
+          :when (and (some? delay-ms) (neg-int? delay-ms))]
+    (throw (ex-info (str "Invalid source config for index " (:name index)
+                         ": source " (:id source)
+                         " inter_request_delay_ms must be zero or positive")
+                    {:type :alida.config/invalid-source-delay
+                     :index (:name index)
+                     :source (:id source)
+                     :value delay-ms})))
+  index)
+
 (defn- validate-source-sitemap-depth!
   [index]
   (doseq [source (:sources index)
@@ -320,6 +334,7 @@
     (validate-positive-embedding-options! index)
     (validate-language-config! index)
     (validate-source-concurrency! index)
+    (validate-source-delay! index)
     (validate-source-sitemap-depth! index)
     (validate-chunking! index))
   config)
