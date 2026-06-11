@@ -84,6 +84,20 @@
                                :type "website"
                                :sitemap_url "https://example.test/sitemap.xml"})))))
 
+(deftest sitemap-http-failure-truncates-large-response-bodies
+  (let [large-body (apply str (repeat (+ source/max-error-body-length 100) "x"))
+        sys (fake-http {"https://example.test/sitemap.xml" {:status 503 :body large-body}}
+                       (atom []))]
+    (try
+      (source/discover sys {:id "site"
+                            :type "website"
+                            :sitemap_url "https://example.test/sitemap.xml"})
+      (is false "Expected sitemap discovery to fail")
+      (catch clojure.lang.ExceptionInfo e
+        (is (= (str (subs large-body 0 source/max-error-body-length) "...")
+               (:body (ex-data e))))
+        (is (true? (:body_truncated (ex-data e))))))))
+
 (deftest discovers-website-urls-from-sitemap-index
   (let [requests (atom [])
         sys (fake-http {"https://example.test/sitemap.xml" {:status 200 :body sitemap-index}
@@ -155,3 +169,18 @@
     (is (source/anomaly? fetched))
     (is (= :cognitect.anomalies/not-found
            (get-in fetched [:alida/error :cognitect.anomalies/category])))))
+
+(deftest failed-website-page-fetches-truncate-large-response-bodies
+  (let [large-body (apply str (repeat (+ source/max-error-body-length 100) "x"))
+        sys (fake-http {"https://example.test/missing" {:status 500 :body large-body}}
+                       (atom []))
+        fetched (source/fetch sys
+                              {:id "site" :type "website"}
+                              {:source_id "site"
+                               :source_type "website"
+                               :canonical_url "https://example.test/missing"})
+        error (:alida/error fetched)]
+    (is (source/anomaly? fetched))
+    (is (= (str (subs large-body 0 source/max-error-body-length) "...")
+           (:body error)))
+    (is (true? (:body_truncated error)))))

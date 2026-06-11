@@ -2,6 +2,7 @@
   (:require [hato.client :as http]))
 
 (def default-request-timeout-ms 60000)
+(def max-error-body-length 1024)
 
 (defn- dispatch-type
   [_sys source-cfg & _]
@@ -46,12 +47,23 @@
   [status]
   (<= 200 status 299))
 
+(defn error-response-details
+  [response]
+  (let [body (:body response)
+        body (when (some? body) (str body))
+        truncated? (and body (> (count body) max-error-body-length))]
+    (cond-> {}
+      body (assoc :body (if truncated?
+                          (str (subs body 0 max-error-body-length) "...")
+                          body))
+      truncated? (assoc :body_truncated true))))
+
 (defn require-success!
   [response context]
   (when-not (successful-status? (:status response))
     (throw (ex-info (str "Source request failed with HTTP " (:status response))
-                    (assoc context
-                           :type :alida.source/http-error
-                           :status (:status response)
-                           :body (:body response)))))
+                    (merge context
+                           {:type :alida.source/http-error
+                            :status (:status response)}
+                           (error-response-details response)))))
   response)
