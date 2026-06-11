@@ -20,7 +20,9 @@
                           (swap! requests conj request)
                           (let [response (first @responses)]
                             (swap! responses subvec 1)
-                            response))
+                            (if (instance? Throwable response)
+                              (throw response)
+                              response)))
     :alida/sleep (fn [millis]
                    (swap! sleeps conj millis))
     :alida/random-int random-int-fn}))
@@ -89,6 +91,23 @@
                 ["a"])]
     (is (= [[0.1]] result))
     (is (= [2000] @sleeps))))
+
+(deftest embedding-retries-transport-io-errors
+  (let [responses (atom [(java.io.IOException. "connection reset")
+                         (json-response {:data [{:index 0 :embedding [0.1]}]})])
+        requests (atom [])
+        sleeps (atom [])
+        result (embed/embed-batch
+                (fake-sys responses requests sleeps)
+                {:provider "openai"
+                 :api_key "openai-key"
+                 :model "text-embedding-3-small"
+                 :max_retries 2
+                 :retry_initial_ms 5}
+                ["a"])]
+    (is (= [[0.1]] result))
+    (is (= 2 (count @requests)))
+    (is (= [5] @sleeps))))
 
 (deftest embedding-batches-can-pause-between-provider-calls
   (let [responses (atom [(json-response {:data [{:index 0 :embedding [0.1]}]})
