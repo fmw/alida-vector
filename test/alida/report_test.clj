@@ -69,14 +69,14 @@
                                                    :verification_verdict "caution"
                                                    :verification {:llm_verdict "caution"})))]
     (is (= "header" (:type (first blocks))))
-    (is (= "Alida Vector: docs crawl CAUTION"
+    (is (= "⚠️ Alida Vector crawl needs review"
            (get-in (first blocks) [:text :text])))
-    (is (some #(str/includes? % "Final verdict")
+    (is (some #(str/includes? % "Verdict")
               (mapcat (fn [block] (map :text (:fields block))) blocks)))
-    (is (some #(str/includes? % "Added")
+    (is (some #(str/includes? % "Changes")
               (mapcat (fn [block] (map :text (:fields block))) blocks)))
     (is (some #(str/includes? % "activate")
-              (mapcat (fn [block] (map :text (:elements block))) blocks)))))
+              (keep #(get-in % [:text :text]) blocks)))))
 
 (deftest builds-full-report
   (let [full-report (:full_report (report/build summary))]

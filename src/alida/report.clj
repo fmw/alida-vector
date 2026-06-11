@@ -67,14 +67,33 @@
   [& parts]
   (str "`" (str/join " " parts) "`"))
 
+(defn- short-run-id
+  [run-id]
+  (subs (str run-id) 0 8))
+
+(defn- verdict-emoji
+  [value]
+  (case value
+    "pass" "✅"
+    "caution" "⚠️"
+    "fail" "❌"
+    "ℹ️"))
+
+(defn- verdict-label
+  [value]
+  (case value
+    "pass" "passed"
+    "caution" "needs review"
+    "fail" "failed"
+    "unknown"))
+
 (defn- action-line
   [{:keys [run_id diff] :as summary}]
   (let [first-run? (nil? (:previous_run_id diff))
         final-verdict (verdict summary)]
     (cond
       (and first-run? (= "pass" final-verdict))
-      (str "First run. Review the report, then activate manually with "
-           (command "alida-vector" "activate" run_id) ".")
+      "First run. Review the full report before activation."
 
       (= "caution" final-verdict)
       (str "Review required. Inspect with "
@@ -93,42 +112,76 @@
            ".")
 
       :else
-      (str "Inspect the full report with "
-           (command "alida-vector" "report" run_id)
-           "."))))
+      "Inspect the full report if anything looks unexpected.")))
+
+(defn- action-commands
+  [{:keys [run_id] :as summary}]
+  (let [final-verdict (verdict summary)]
+    (cond-> [(str "Report: " (command "alida-vector" "report" run_id))]
+      (= "caution" final-verdict)
+      (conj (str "Activate caution: " (command "alida-vector" "activate" run_id "--allow-caution")))
+
+      (= "fail" final-verdict)
+      (conj (str "Reject: " (command "alida-vector" "reject" run_id))))))
+
+(defn- change-summary
+  [summary]
+  (format "+%s / -%s / ~%s / moved %s"
+          (diff-count summary :added_count)
+          (diff-count summary :removed_count)
+          (diff-count summary :changed_count)
+          (diff-count summary :moved_count)))
+
+(defn- content-summary
+  [document-count chunk-count error-count]
+  (format "%s docs / %s chunks / %s errors"
+          (value document-count)
+          (value chunk-count)
+          (value error-count)))
+
+(defn- embedding-summary
+  [embedding-stats]
+  (format "%s reused / %s new / %s requests"
+          (value (:reused_chunk_count embedding-stats))
+          (value (:embedded_chunk_count embedding-stats))
+          (value (:embedding_request_count embedding-stats))))
+
+(defn- verification-summary
+  [summary]
+  (format "deterministic %s / llm %s"
+          (deterministic-verdict summary)
+          (llm-verdict summary)))
 
 (defn slack-blocks
   [{:keys [run_id index_name lifecycle_status document_count chunk_count error_count
            embedding_stats phase_stats] :as summary}]
-  [{:type "header"
-    :text {:type "plain_text"
-           :text (truncate (format "Alida Vector: %s crawl %s"
-                                   index_name
-                                   (str/upper-case (verdict summary)))
-                           150)}}
-   {:type "section"
-    :fields [(field "Run" (command run_id))
-             (field "Status" (or lifecycle_status "-"))
-             (field "Final verdict" (verdict summary))
-             (field "LLM verdict" (llm-verdict summary))]}
-   {:type "section"
-    :fields [(field "Documents" (value document_count))
-             (field "Chunks" (value chunk_count))
-             (field "Errors" (value error_count))
-             (field "Deterministic" (deterministic-verdict summary))]}
-   {:type "section"
-    :fields [(field "Added" (diff-count summary :added_count))
-             (field "Removed" (diff-count summary :removed_count))
-             (field "Changed" (diff-count summary :changed_count))
-             (field "Moved" (diff-count summary :moved_count))]}
-   {:type "section"
-    :fields [(field "Reused chunks" (value (:reused_chunk_count embedding_stats)))
-             (field "Embedded chunks" (value (:embedded_chunk_count embedding_stats)))
-             (field "Embedding requests" (value (:embedding_request_count embedding_stats)))
-             (field "Crawl time" (str (ms phase_stats :crawl_duration_ms) " ms"))]}
-   {:type "context"
-    :elements [{:type "mrkdwn"
-                :text (slack-escape (action-line summary))}]}])
+  (let [final-verdict (verdict summary)]
+    [{:type "header"
+      :text {:type "plain_text"
+             :emoji true
+             :text (truncate (format "%s Alida Vector crawl %s"
+                                     (verdict-emoji final-verdict)
+                                     (verdict-label final-verdict))
+                             150)}}
+     {:type "section"
+      :fields [(field "Index" index_name)
+               (field "Run" (short-run-id run_id))
+               (field "Status" (or lifecycle_status "-"))
+               (field "Verdict" final-verdict)]}
+     {:type "section"
+      :fields [(field "Content" (content-summary document_count chunk_count error_count))
+               (field "Changes" (change-summary summary))
+               (field "Embeddings" (embedding-summary embedding_stats))
+               (field "Verification" (verification-summary summary))]}
+     {:type "section"
+      :fields [(field "Crawl time" (str (ms phase_stats :crawl_duration_ms) " ms"))
+               (field "Embedding time" (str (ms phase_stats :embedding_duration_ms) " ms"))]}
+     {:type "section"
+      :text {:type "mrkdwn"
+             :text (str "*Next step*\n"
+                        (slack-escape (action-line summary))
+                        "\n"
+                        (str/join "\n" (map #(str "- " %) (action-commands summary))))}}]))
 
 (defn- source-line
   [{:keys [source_cfg document_count chunk_count error_count crawl_stats embedding_stats]}]
