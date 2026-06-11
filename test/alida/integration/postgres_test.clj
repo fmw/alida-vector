@@ -435,10 +435,11 @@
   (let [result (with-temp-database
                  (fn [db-config ds]
                    (db/migrate! {:database db-config})
-                   (let [previous-live (db/create-run! ds index-cfg "hash-1")
-                         current-live (db/create-run! ds index-cfg "hash-1")
-                         prunable (db/create-run! ds index-cfg "hash-1")
-                         recent (db/create-run! ds index-cfg "hash-1")]
+                     (let [previous-live (db/create-run! ds index-cfg "hash-1")
+                           current-live (db/create-run! ds index-cfg "hash-1")
+                           prunable (db/create-run! ds index-cfg "hash-1")
+                           in-progress (db/create-run! ds index-cfg "hash-1")
+                           recent (db/create-run! ds index-cfg "hash-1")]
                      (doseq [run [previous-live current-live prunable recent]]
                        (insert-searchable-chunk! ds (:id run) (str "Content " (:id run)))
                        (db/save-report! ds (:id run) {:slack_summary "summary"
@@ -448,14 +449,16 @@
                      (db/update-run-status! ds (:id current-live) "complete" {:verification_verdict "pass"})
                      (db/activate-run! ds (:id current-live))
                      (db/update-run-status! ds (:id prunable) "error")
+                     (db/update-run-status! ds (:id in-progress) "crawling")
                      (db/update-run-status! ds (:id recent) "error")
                      (jdbc/execute! ds
                                     ["UPDATE alida_runs
                                       SET started_at = now() - interval '90 days'
-                                      WHERE id IN (?, ?, ?)"
+                                      WHERE id IN (?, ?, ?, ?)"
                                      (:id previous-live)
                                      (:id current-live)
-                                     (:id prunable)])
+                                     (:id prunable)
+                                     (:id in-progress)])
                      (let [pruned (db/prune-runs! ds
                                                   {:older-than (.minus (java.time.Instant/now)
                                                                        (java.time.Duration/ofDays 30))})
@@ -464,6 +467,7 @@
                         :previous-live (db/get-run ds (:id previous-live))
                         :current-live (db/get-run ds (:id current-live))
                         :prunable (db/get-run ds (:id prunable))
+                        :in-progress (db/get-run ds (:id in-progress))
                         :recent (db/get-run ds (:id recent))
                         :prunable-partition (:partition
                                              (jdbc/execute-one!
@@ -487,6 +491,7 @@
         (is (some? (:previous-live result)))
         (is (some? (:current-live result)))
         (is (nil? (:prunable result)))
+        (is (= "crawling" (get-in result [:in-progress :lifecycle_status])))
         (is (some? (:recent result)))
         (is (nil? (:prunable-partition result)))
         (is (nil? (:prunable-report result)))
