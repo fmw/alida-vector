@@ -8,6 +8,22 @@
    :index_name "docs"
    :lifecycle_status "complete"
    :verification_verdict nil
+   :diff {:previous_run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61c"
+          :summary {:added_count 1
+                    :removed_count 1
+                    :changed_count 1
+                    :moved_count 1}
+          :added_urls [{:source_id "website"
+                        :canonical_url "https://example.test/added"}]
+          :removed_urls [{:source_id "website"
+                          :canonical_url "https://example.test/removed"}]
+          :changed_urls [{:source_id "website"
+                          :canonical_url "https://example.test/changed"
+                          :previous_normalized_content_hash "old"
+                          :current_normalized_content_hash "new"}]
+          :moved_urls [{:source_id "website"
+                        :previous_canonical_url "https://example.test/old"
+                        :current_canonical_url "https://example.test/new"}]}
    :source_count 1
    :document_count 2
    :chunk_count 3
@@ -39,11 +55,15 @@
   (let [built (report/build summary)]
     (is (str/includes? (:slack_summary built) "docs run 018c9099-041d-7f5b-9b65-5b8f08f8e61d"))
     (is (str/includes? (:slack_summary built) "documents=2"))
+    (is (str/includes? (:slack_summary built) "added=1"))
     (is (str/includes? (:slack_summary built) "verdict=-"))))
 
 (deftest builds-full-report
   (let [full-report (:full_report (report/build summary))]
     (is (str/includes? full-report "Run: 018c9099-041d-7f5b-9b65-5b8f08f8e61d"))
+    (is (str/includes? full-report "Diff"))
+    (is (str/includes? full-report "Added URLs"))
+    (is (str/includes? full-report "https://example.test/changed old -> new"))
     (is (str/includes? full-report "Timings"))
     (is (str/includes? full-report "Embedding"))
     (is (str/includes? full-report "- website (website): documents=2"))))

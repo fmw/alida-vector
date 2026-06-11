@@ -5,6 +5,7 @@
             [alida.embed :as embed]
             [alida.source.local]
             [alida.vector.pgvector :as pgvector]
+            [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is testing]]
             [next.jdbc :as jdbc]))
@@ -99,6 +100,17 @@
     (.deleteOnExit file)
     (spit file body)
     file))
+
+(defn- jsonb-value
+  [value]
+  (cond
+    (instance? org.postgresql.util.PGobject value)
+    (json/read-str (.getValue value) :key-fn keyword)
+
+    (string? value)
+    (json/read-str value :key-fn keyword)
+
+    :else value))
 
 (deftest ^:integration migrates-supported-pgvector-schema
   (let [result (with-temp-database
@@ -310,6 +322,47 @@
         (is (nat-int? (get-in result [:second-summary :embedding_stats :provider_duration_ms])))
         (is (= 1 (count (:second-chunks result))))
         (is (= 64 (count (-> result :second-chunks first :content_hash))))))))
+
+(deftest ^:integration crawl-index-stores-diff-against-live-run
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (let [file (temp-file ".html"
+                                         "<html lang=\"en\"><head><title>Support</title></head>
+                                          <body><h1>Support</h1><p>First version of the support article.</p></body></html>")
+                         test-index (assoc index-cfg
+                                           :sources [{:id "fixtures"
+                                                      :type "local"
+                                                      :path (.getPath file)}])
+                         sys {:alida/config {:alida.config/structural-hash "hash-1"
+                                             :indexes [test-index]}}]
+                     (with-redefs [embed/embed-batch (fn [_ _ texts]
+                                                       (mapv (fn [_] (zero-vector 1536)) texts))]
+                       (let [first-summary (crawl/crawl-index! sys ds test-index)]
+                         (db/update-run-status! ds (:run_id first-summary) "complete" {:verification_verdict "pass"})
+                         (db/activate-run! ds (:run_id first-summary))
+                         (spit file "<html lang=\"en\"><head><title>Support</title></head>
+                                     <body><h1>Support</h1><p>Second version with updated content.</p></body></html>")
+                         (let [second-summary (crawl/crawl-index! sys ds test-index)
+                               run-diff (db/get-run-diff ds (:run_id second-summary))]
+                           {:first-summary first-summary
+                            :second-summary second-summary
+                            :run-diff run-diff
+                            :report (db/get-report ds (:run_id second-summary))}))))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (testing "candidate diff is stored against the live run"
+        (is (= (get-in result [:first-summary :run_id])
+               (get-in result [:run-diff :previous_run_id])))
+        (is (= {:previous_document_count 1
+                :current_document_count 1
+                :added_count 0
+                :removed_count 0
+                :changed_count 1
+                :moved_count 0}
+               (jsonb-value (get-in result [:run-diff :summary]))))
+        (is (= 1 (count (jsonb-value (get-in result [:run-diff :changed_urls])))))
+        (is (str/includes? (get-in result [:report :full_report]) "Changed URLs"))))))
 
 (deftest ^:integration crawl-index-does-not-reuse-embeddings-after-provider-endpoint-change
   (let [result (with-temp-database
