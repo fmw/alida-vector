@@ -7,7 +7,7 @@
 (defn- temp-file
   [suffix content]
   (let [file (java.io.File/createTempFile "alida-source-local" suffix)]
-    (spit file content)
+    (spit file content :encoding "UTF-8")
     file))
 
 (deftest discovers-and-fetches-configured-local-files
@@ -30,6 +30,7 @@
 (deftest discovers-root-files-by-extension
   (let [dir (java.nio.file.Files/createTempDirectory "alida-source-local-root" (make-array java.nio.file.attribute.FileAttribute 0))
         html (doto (io/file (.toFile dir) "article.html") (spit "<p>Article</p>"))
+        text (doto (io/file (.toFile dir) "notes.txt") (spit "Notes"))
         ignored (doto (io/file (.toFile dir) "image.bin") (spit "ignored"))]
     (try
       (let [items (source/discover {} {:id "fixtures"
@@ -37,11 +38,42 @@
                                        :root (str dir)})]
         (is (= #{(.getCanonicalPath html)}
                (set (map :path items))))
+        (is (not-any? #(= (.getCanonicalPath text) (:path %)) items))
         (is (not-any? #(= (.getCanonicalPath ignored) (:path %)) items)))
       (finally
         (.delete html)
+        (.delete text)
         (.delete ignored)
         (.delete (.toFile dir))))))
+
+(deftest explicit-root-extensions-can-include-non-html-files
+  (let [dir (java.nio.file.Files/createTempDirectory "alida-source-local-root" (make-array java.nio.file.attribute.FileAttribute 0))
+        html (doto (io/file (.toFile dir) "article.html") (spit "<p>Article</p>"))
+        text (doto (io/file (.toFile dir) "notes.txt") (spit "Notes"))]
+    (try
+      (let [items (source/discover {} {:id "fixtures"
+                                       :type "local"
+                                       :root (str dir)
+                                       :include_extensions ["txt"]})]
+        (is (= #{(.getCanonicalPath text)}
+               (set (map :path items))))
+        (is (= ["text/plain"] (mapv :content_type items)))
+        (is (not-any? #(= (.getCanonicalPath html) (:path %)) items)))
+      (finally
+        (.delete html)
+        (.delete text)
+        (.delete (.toFile dir))))))
+
+(deftest fetches-local-files-as-utf-8
+  (let [file (temp-file ".html" "<p>Résumé</p>")]
+    (try
+      (let [item (first (source/discover {} {:id "fixtures"
+                                             :type "local"
+                                             :paths [(.getPath file)]}))
+            fetched (source/fetch {} {:id "fixtures" :type "local"} item)]
+        (is (= "<p>Résumé</p>" (:body fetched))))
+      (finally
+        (.delete file)))))
 
 (deftest missing-local-files-are-recoverable-anomalies
   (let [item (first (source/discover {} {:id "fixtures"
