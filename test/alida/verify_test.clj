@@ -77,7 +77,7 @@
                   :index_name "docs"
                   :deterministic_verification {:deterministic_verdict "pass"}
                   :diff {:summary {:added_count 3}}
-                  :max_prompt_tokens 64
+                  :max_prompt_tokens 210
                   :documents [{:canonical_url "https://example.test/1"
                                :chunks [{:content "first long enough document"}]}
                               {:canonical_url "https://example.test/2"
@@ -94,7 +94,7 @@
                   :index_name "docs"
                   :deterministic_verification {:deterministic_verdict "pass"}
                   :diff {:summary {:changed_count 1}}
-                  :max_prompt_tokens 170
+                  :max_prompt_tokens 310
                   :documents [{:canonical_url "https://example.test/large"
                                :chunks [{:content "alpha marker one"}
                                         {:content (apply str (repeat 45 "middle "))}
@@ -116,6 +116,22 @@
          :max_prompt_tokens 10
          :documents [{:canonical_url "https://example.test/large"
                       :chunks [{:content (apply str (repeat 100 "word "))}]}]}))))
+
+(deftest build-prompts-fails-before-provider-when-prompt-overhead-is-oversized
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo
+       #"prompt overhead exceeds max_prompt_tokens"
+       (verify/build-prompts
+        {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+         :index_name "docs"
+         :deterministic_verification {:deterministic_verdict "pass"}
+         :diff {:summary {:removed_count 500}
+                :removed_urls (mapv (fn [n]
+                                      {:source_id "docs"
+                                       :canonical_url (str "https://example.test/removed/" n)})
+                                    (range 500))}
+         :max_prompt_tokens 200
+         :documents []}))))
 
 (deftest parse-structured-verdict-validates-verdict
   (is (= {:verdict "caution"
