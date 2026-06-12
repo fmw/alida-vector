@@ -60,7 +60,8 @@
 (defn- extract-document
   [source-cfg fetched]
   (if (html-content? (:content_type fetched))
-    (html/extract source-cfg fetched)
+    (cond-> (html/extract source-cfg fetched)
+      (:external_id fetched) (assoc :external_id (:external_id fetched)))
     (source/anomaly :cognitect.anomalies/unsupported
                     {:type :alida.crawl/unsupported-content-type
                      :source-id (:id source-cfg)
@@ -241,6 +242,75 @@
             (cp/shutdown! pool)
             nil))))))
 
+(defn- url-preference-score
+  [source-cfg document-result]
+  (let [url (get-in document-result [:document :canonical_url])]
+    (count (filter #(and url (str/includes? url %))
+                   (:dedupe_prefer_url_substrings source-cfg)))))
+
+(defn- url-length
+  [document-result]
+  (count (or (get-in document-result [:document :canonical_url]) "")))
+
+(defn- preferred-document
+  [source-cfg existing candidate]
+  (let [candidate-score (url-preference-score source-cfg candidate)
+        existing-score (url-preference-score source-cfg existing)]
+    (cond
+      (> candidate-score existing-score)
+      candidate
+
+      (< candidate-score existing-score)
+      existing
+
+      (< (url-length candidate) (url-length existing))
+      candidate
+
+      :else
+      existing)))
+
+(defn- dedupe-documents-by-external-id
+  [source-cfg documents]
+  (let [source-cfg (dissoc source-cfg :dedupe_prefer_url_substrings)]
+    (->> documents
+         (reduce (fn [result document-result]
+                   (let [external-id (get-in document-result [:document :external_id])]
+                     (if (seq external-id)
+                       (if-let [existing (get-in result [:by-id external-id])]
+                         (let [preferred (preferred-document source-cfg existing document-result)]
+                           (-> result
+                               (assoc-in [:by-id external-id] preferred)
+                               (update :items
+                                       (fn [items]
+                                         (mapv #(if (= external-id
+                                                       (get-in % [:document :external_id]))
+                                                  preferred
+                                                  %)
+                                               items)))))
+                         (-> result
+                             (assoc-in [:by-id external-id] document-result)
+                             (update :items conj document-result)))
+                       (update result :items conj document-result))))
+                 {:by-id {}
+                  :items []})
+         :items)))
+
+(defn- dedupe-documents-by-content
+  [source-cfg documents]
+  (if (:dedupe_content source-cfg)
+    (->> documents
+         (reduce (fn [by-hash document-result]
+                   (let [content-hash (get-in document-result [:document :normalized_content_hash])]
+                     (if-let [existing (get by-hash content-hash)]
+                       (assoc by-hash
+                              content-hash
+                              (preferred-document source-cfg existing document-result))
+                       (assoc by-hash content-hash document-result))))
+                 (array-map))
+         vals
+         vec)
+    documents))
+
 (defn process-source
   [sys index-cfg source-cfg]
   (let [source-started (now-ns)
@@ -251,7 +321,10 @@
         processing-started (now-ns)
         results (process-discovered-items sys index-cfg source-cfg unique-discovered)
         processing-duration-ms (elapsed-ms processing-started)
-        documents (filterv :document results)
+        processed-documents (filterv :document results)
+        documents (->> processed-documents
+                       (dedupe-documents-by-external-id source-cfg)
+                       (dedupe-documents-by-content source-cfg))
         errors (mapv :error (filter :error results))
         empty-or-short-count (count (filter :empty_or_short_document results))
         item-stats (aggregate-stats (map :crawl_stats results))
@@ -265,6 +338,8 @@
     {:source_cfg source-cfg
      :discovered_count (count discovered)
      :unique_discovered_count (count unique-discovered)
+     :processed_document_count (count processed-documents)
+     :deduped_document_count (- (count processed-documents) (count documents))
      :document_count (count documents)
      :chunk_count (reduce + 0 (map (comp count :chunks) documents))
      :error_count (count errors)
@@ -355,6 +430,9 @@
 (defn- source-metadata
   [source-result]
   {:discovered_count (:discovered_count source-result)
+   :unique_discovered_count (:unique_discovered_count source-result)
+   :processed_document_count (:processed_document_count source-result)
+   :deduped_document_count (:deduped_document_count source-result)
    :chunk_count (:chunk_count source-result)
    :crawl_stats (:crawl_stats source-result)
    :embedding_stats (:embedding_stats source-result)
