@@ -61,5 +61,34 @@ indexes:
       - id: support
         type: jira-service-management
         url: https://example.atlassian.net/servicedesk/customer/portal/1
+        allowed_url_prefixes:
+          - https://example.atlassian.net/servicedesk/customer/portal/1/topic/
+          - https://example.atlassian.net/servicedesk/customer/portal/1/article/
+          - https://example.atlassian.net/plugins/servlet/servicedesk/customer/confluence/shim/
+        denied_urls: []
+        denied_url_prefixes: []
+        max_pages: 1000
+        browser_restart_after_pages: 50
+        browser_restart_after_failures: 2
+        progress_log_every_pages: 25
+        dedupe_content: true
+        dedupe_prefer_url_substrings:
+          - /topic/
+        max_concurrency: 1
+        inter_request_delay_ms: 100
+        content_wait_selectors:
+          - a[href*="/article/"]
+          - a[href*="/topic/"]
+          - main article
+          - article
+        remove_selectors:
+          - footer
+          - nav
+          - "[role=dialog]"
+          - "[data-testid=outer-BannerContainer]"
+        strip_text:
+          - "Did this article help? Yes No Need to raise a request? Contact us."
+          - "Did this article help? Yes No"
+          - "Need to raise a request? Contact us."
         language:
           mode: detect

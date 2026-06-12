@@ -721,21 +721,55 @@ indexes:
         allowed_url_prefixes: [https://example.test/docs/]
         denied_urls: [https://example.test/docs/secret]
         denied_url_prefixes: [https://example.test/private/]
+        dedupe_content: true
+        dedupe_prefer_url_substrings: [/docs/canonical/]
         max_concurrency: 7
         inter_request_delay_ms: 100
         max_sitemap_depth: 5
+      - id: support
+        type: jira-service-management
+        url: https://example.atlassian.net/servicedesk/customer/portal/1
+        allowed_url_prefixes: [https://example.atlassian.net/servicedesk/customer/portal/1/topic/]
+        denied_url_prefixes: [https://example.atlassian.net/servicedesk/customer/portal/1/private/]
+        remove_selectors: [nav, footer]
+        strip_text:
+          - \"Did this article help? Yes No\"
+        content_wait_selectors: [main, article]
+        browser_args: [--disable-background-networking]
+        internal_link_hosts: [example.atlassian.net, api.example.test]
+        preserve_external_links: true
+        max_pages: 25
+        page_load_timeout_seconds: 20
+        wait_timeout_ms: 5000
+        wait_interval_ms: 100
+        url_stabilization_ms: 100
+        url_stabilization_attempts: 3
+        url_stabilization_stable_count: 1
+        browser_restart_after_pages: 50
+        browser_restart_after_failures: 2
+        progress_log_every_pages: 25
 ")
       (let [index (-> (config/load-config (.getPath file)) :indexes first)
             sources (:sources index)]
         (is (= 100 (-> index :embedding :retry_jitter_ms)))
         (is (= 250 (-> index :embedding :inter_batch_delay_ms)))
-        (is (= ["local" "website"] (mapv :type sources)))
+        (is (= ["local" "website" "jira-service-management"] (mapv :type sources)))
         (is (= ["html" "md"] (-> sources first :include_extensions)))
         (is (= ["https://example.test/docs/"] (-> sources second :allowed_url_prefixes)))
         (is (= ["https://example.test/docs/secret"] (-> sources second :denied_urls)))
+        (is (true? (-> sources second :dedupe_content)))
+        (is (= ["/docs/canonical/"] (-> sources second :dedupe_prefer_url_substrings)))
         (is (= 7 (-> sources second :max_concurrency)))
         (is (= 100 (-> sources second :inter_request_delay_ms)))
-        (is (= 5 (-> sources second :max_sitemap_depth))))
+        (is (= 5 (-> sources second :max_sitemap_depth)))
+        (is (= 25 (-> sources (nth 2) :max_pages)))
+        (is (= ["main" "article"] (-> sources (nth 2) :content_wait_selectors)))
+        (is (= ["example.atlassian.net" "api.example.test"] (-> sources (nth 2) :internal_link_hosts)))
+        (is (true? (-> sources (nth 2) :preserve_external_links)))
+        (is (= 20 (-> sources (nth 2) :page_load_timeout_seconds)))
+        (is (= 50 (-> sources (nth 2) :browser_restart_after_pages)))
+        (is (= 2 (-> sources (nth 2) :browser_restart_after_failures)))
+        (is (= 25 (-> sources (nth 2) :progress_log_every_pages))))
       (finally
         (.delete file)))))
 
@@ -801,6 +835,39 @@ indexes:
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"max_sitemap_depth must be positive"
+                            (config/load-config (.getPath file))))
+      (finally
+        (.delete file)))))
+
+(deftest source-browser-restart-options-must-be-zero-or-positive
+  (let [file (java.io.File/createTempFile "alida-source-browser-restart" ".yml")]
+    (try
+      (spit file
+            "database:
+  jdbc_url: jdbc:postgresql://localhost/alida
+verification:
+  provider: openai
+  model: gpt-4.1-mini
+  api_key: test-key
+indexes:
+  - name: docs
+    embedding:
+      provider: openai
+      model: text-embedding-3-small
+      embedding_dimensions: 1536
+      api_key: test-key
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 6550
+      safety_multiplier: 1.2
+    sources:
+      - id: support
+        type: jira-service-management
+        url: https://example.atlassian.net/servicedesk/customer/portal/1
+        progress_log_every_pages: -1
+")
+      (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                            #"progress_log_every_pages must be zero or positive"
                             (config/load-config (.getPath file))))
       (finally
         (.delete file)))))

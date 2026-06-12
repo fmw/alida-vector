@@ -47,8 +47,8 @@
 
   :dev {:extra-paths ["dev" "test"]
         :extra-deps {integrant/repl {:mvn/version "0.4.0"}
-                     nrepl/nrepl {:mvn/version "1.5.0"}
-                     cider/cider-nrepl {:mvn/version "1.20.0"}
+                     nrepl/nrepl {:mvn/version "1.7.0"}
+                     cider/cider-nrepl {:mvn/version "0.59.0"}
                      djblue/portal {:mvn/version "0.63.1"}}}
 
   :dev-fixtures {:extra-paths ["dev-fixtures"]}

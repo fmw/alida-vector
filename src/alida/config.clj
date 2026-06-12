@@ -305,6 +305,24 @@
                      :value max-depth})))
   index)
 
+(defn- validate-source-browser-restart!
+  [index]
+  (doseq [source (:sources index)
+          k [:browser_restart_after_pages
+             :browser_restart_after_failures
+             :progress_log_every_pages]
+          :let [value (get source k)]
+          :when (and (some? value) (neg-int? value))]
+    (throw (ex-info (str "Invalid source config for index " (:name index)
+                         ": source " (:id source)
+                         " " (name k) " must be zero or positive")
+                    {:type :alida.config/invalid-source-browser-restart
+                     :index (:name index)
+                     :source (:id source)
+                     :key k
+                     :value value})))
+  index)
+
 (defn- validate-deterministic-thresholds!
   [config]
   (let [thresholds (get-in config [:verification :deterministic_thresholds])]
@@ -336,6 +354,7 @@
     (validate-source-concurrency! index)
     (validate-source-delay! index)
     (validate-source-sitemap-depth! index)
+    (validate-source-browser-restart! index)
     (validate-chunking! index))
   config)
 
