@@ -106,6 +106,63 @@
     (is (= 1 (:document_count result)))
     (is (= 0 (:error_count result)))))
 
+(deftest process-source-can-deduplicate-documents-by-content-hash
+  (let [items [{:source_id "fixtures"
+                :source_type "local"
+                :canonical_url "https://example.test/article/1"
+                :content_type "text/html"}
+               {:source_id "fixtures"
+                :source_type "local"
+                :canonical_url "https://example.test/topic/a/article/1"
+                :content_type "text/html"}]
+        result (with-redefs [source/discover (fn [_ _] items)
+                             source/fetch (fn [_ _ item]
+                                            (assoc item
+                                                   :body "<html lang=\"en\"><body><h1>Same</h1><p>This document can be processed.</p></body></html>"))]
+                 (crawl/process-source
+                  {}
+                  index-cfg
+                  {:id "fixtures"
+                   :type "local"
+                   :dedupe_content true
+                   :dedupe_prefer_url_substrings ["/topic/"]}))]
+    (is (= 2 (:processed_document_count result)))
+    (is (= 1 (:deduped_document_count result)))
+    (is (= 1 (:document_count result)))
+    (is (= "https://example.test/topic/a/article/1"
+           (-> result :documents first :document :canonical_url)))))
+
+(deftest process-source-deduplicates-documents-by-external-id
+  (let [items [{:source_id "fixtures"
+                :source_type "local"
+                :external_id "article-1"
+                :canonical_url "https://example.test/topic/a/article/1"
+                :content_type "text/html"}
+               {:source_id "fixtures"
+                :source_type "local"
+                :external_id "article-1"
+                :canonical_url "https://example.test/article/1"
+                :content_type "text/html"}]
+        result (with-redefs [source/discover (fn [_ _] items)
+                             source/fetch (fn [_ _ item]
+                                            (assoc item
+                                                   :body (str "<html lang=\"en\"><body><h1>"
+                                                              (:canonical_url item)
+                                                              "</h1><p>This document can be processed.</p></body></html>")))]
+                 (crawl/process-source
+                  {}
+                  index-cfg
+                  {:id "fixtures"
+                   :type "local"
+                   :dedupe_prefer_url_substrings ["/topic/"]}))]
+    (is (= 2 (:processed_document_count result)))
+    (is (= 1 (:deduped_document_count result)))
+    (is (= 1 (:document_count result)))
+    (is (= "article-1"
+           (-> result :documents first :document :external_id)))
+    (is (= "https://example.test/article/1"
+           (-> result :documents first :document :canonical_url)))))
+
 (deftest process-source-records-thrown-fetch-exceptions-as-item-errors
   (let [item {:source_id "fixtures"
               :source_type "local"
