@@ -1,327 +1,248 @@
 (ns alida.source.jira-service-management-test
   (:require [alida.source :as source]
-            [alida.source.jira-service-management :as jsm]
-            [clojure.test :refer [deftest is]]
-            [etaoin.api :as e]))
+            [alida.source.jira-service-management]
+            [alida.source.webdriver :as webdriver]
+            [clojure.data.json :as json]
+            [clojure.string :as str]
+            [clojure.test :refer [deftest is]]))
 
-(defn- page
-  [url hrefs]
-  {:source_id "support"
-   :source_type "jira-service-management"
-   :canonical_url url
-   :content_type "text/html"
-   :title (str "Page " url)
-   :body (str "<main><h1>" url "</h1><p>Rendered article.</p></main>")
-   :hrefs hrefs})
+(def workspace-id "123e4567-e89b-12d3-a456-426614174000")
 
-(deftest discovers-rendered-pages-and-follows-allowed-links
-  (let [visited (atom [])
-        quit? (atom false)]
-    (with-redefs-fn {#'jsm/start-driver! (fn [_] :driver)
-                     #'jsm/quit-driver! (fn [driver]
-                                          (is (= :driver driver))
-                                          (reset! quit? true))
-                     #'jsm/render-page! (fn [driver _source-cfg url]
-                                          (is (= :driver driver))
-                                          (swap! visited conj url)
-                                          (case url
-                                            "https://example.test/portal"
-                                            (page url ["https://example.test/portal/topic/a"
-                                                       "https://example.test/private/skip"
-                                                       "https://other.test/offsite"])
+(defn- portal-page
+  ([]
+   (portal-page {:portal-id 1
+                 :project-id 42
+                 :workspace-id workspace-id
+                 :origin "https://example.atlassian.net"
+                 :topic-id "topic-a"}))
+  ([{:keys [portal-id project-id workspace-id origin topic-id]}]
+  (str "<html><body>"
+       "<script>window.api = '/gateway/api/jsd-apollo-stargate/sharded/workspace/"
+       workspace-id
+       "/api/project/" project-id "';</script>"
+       "<div id=\"jsonPayload\">"
+       (json/write-str {:portal {:id portal-id
+                                  :projectId project-id
+                                  :categories
+                                  {:categories
+                                   [{:id topic-id
+                                     :categoryUrl (str origin
+                                                       "/servicedesk/customer/portal/"
+                                                       portal-id
+                                                       "/topic/"
+                                                       topic-id)}]}}})
+       "</div>"
+       "</body></html>")))
 
-                                            "https://example.test/portal/topic/a"
-                                            (page url ["https://example.test/portal/topic/b"])
+(defn- category-url
+  ([]
+   (category-url {:origin "https://example.atlassian.net"
+                  :workspace-id workspace-id
+                  :project-id 42
+                  :topic-id "topic-a"
+                  :start 0
+                  :limit 100}))
+  ([{:keys [origin workspace-id project-id topic-id start limit]}]
+   (str origin
+        "/gateway/api/jsd-apollo-stargate/sharded/workspace/"
+        workspace-id
+        "/api/project/"
+        project-id
+        "/category/"
+        topic-id
+        "/article?expand=category&limit="
+        limit
+        "&orderBy=%2Bfeatured&start="
+        start)))
 
-                                            "https://example.test/portal/topic/b"
-                                            (page url [])))}
-      (fn []
-      (let [items (source/discover
-                   {}
-                   {:id "support"
-                    :type "jira-service-management"
-                    :url "https://example.test/portal"
-                    :denied_url_prefixes ["https://example.test/private/"]})]
-        (is @quit?)
-        (is (= ["https://example.test/portal"
-                "https://example.test/portal/topic/a"
-                "https://example.test/portal/topic/b"]
-               @visited))
-        (is (= @visited (mapv :canonical_url items)))
-        (is (every? :body items)))))))
+(defn- category-response
+  []
+  (json/write-str {:results [{:id "1001"
+                              :title "Article One"
+                              :viewUrl "/servicedesk/customer/portal/1/topic/topic-a/article/1001"}
+                             {:id "1002"
+                              :title "Article Two"
+                              :viewUrl "/servicedesk/customer/portal/1/topic/topic-a/article/1002"}]}))
 
-(deftest configured-allowed-prefixes-override-same-origin-default
-  (let [visited (atom [])]
-    (with-redefs-fn {#'jsm/start-driver! (fn [_] :driver)
-                     #'jsm/quit-driver! (fn [_])
-                     #'jsm/render-page! (fn [_ _ url]
-                                          (swap! visited conj url)
-                                          (page url ["https://example.test/allowed/a"
-                                                     "https://example.test/other/b"]))}
-      (fn []
-      (let [items (source/discover
-                   {}
-                   {:id "support"
-                    :type "jira-service-management"
-                    :url "https://example.test/portal"
-                    :allowed_url_prefixes ["https://example.test/allowed/"]
-                    :max_pages 2})]
-        (is (= ["https://example.test/portal"
-                "https://example.test/allowed/a"]
-               @visited))
-        (is (= @visited (mapv :canonical_url items))))))))
+(defn- fake-http
+  [responses requests]
+  {:alida/http-request (fn [request]
+                         (swap! requests conj request)
+                         (or (get responses (:url request))
+                             {:status 500
+                              :body (str "missing fake response for " (:url request))}))})
 
-(deftest discovery-stops-at-max-pages-and-returns-render-errors
-  (let [quit? (atom false)]
-    (with-redefs-fn {#'jsm/start-driver! (fn [_] :driver)
-                     #'jsm/quit-driver! (fn [_] (reset! quit? true))
-                     #'jsm/render-page! (fn [_ _ url]
-                                          (if (= "https://example.test/portal" url)
-                                            (page url ["https://example.test/portal/a"])
-                                            (source/anomaly :cognitect.anomalies/fault
-                                                            {:type :test/render-failed
-                                                             :canonical-url url})))}
-      (fn []
-      (let [items (source/discover
-                   {}
-                   {:id "support"
-                    :type "jira-service-management"
-                    :url "https://example.test/portal"
-                    :max_pages 2})]
-        (is @quit?)
-        (is (= 2 (count items)))
-        (is (source/anomaly? (second items))))))))
+(def source-cfg
+  {:id "support"
+   :type "jira-service-management"
+   :crawl_method "api"
+   :url "https://example.atlassian.net/servicedesk/customer/portal/1"
+   :allowed_url_prefixes ["https://example.atlassian.net/servicedesk/customer/portal/1/"]
+   :max_pages 10
+   :api_max_concurrency 2})
 
-(deftest discovery-restarts-browser-after-page-limit
-  (let [starts (atom 0)
-        quits (atom [])
-        rendered-with (atom [])]
-    (with-redefs-fn {#'jsm/start-driver! (fn [_]
-                                           (keyword (str "driver-" (swap! starts inc))))
-                     #'jsm/quit-driver! (fn [driver]
-                                          (swap! quits conj driver))
-                     #'jsm/render-page! (fn [driver _ url]
-                                          (swap! rendered-with conj driver)
-                                          (case url
-                                            "https://example.test/portal"
-                                            (page url ["https://example.test/portal/a"])
+(deftest discovers-articles-through-jsm-api
+  (let [requests (atom [])
+        sys (fake-http {"https://example.atlassian.net/servicedesk/customer/portal/1"
+                        {:status 200 :body (portal-page)}
+                        (category-url)
+                        {:status 200 :body (category-response)}
+                        "https://example.atlassian.net/rest/servicedesk/knowledgebase/latest/articles/view/1001"
+                        {:status 200
+                         :headers {"Content-Type" "text/html"}
+                         :body "<article><h1>Article One</h1><p>Body one.</p><a href=\"/servicedesk/customer/portal/1/article/1003\">Related</a></article>"}
+                        "https://example.atlassian.net/rest/servicedesk/knowledgebase/latest/articles/view/1002"
+                        {:status 200
+                         :headers {"Content-Type" "text/html"}
+                         :body "<article><h1>Article Two</h1><p>Body two.</p></article>"}
+                        "https://example.atlassian.net/rest/servicedesk/knowledgebase/latest/articles/view/1003"
+                        {:status 200
+                         :headers {"Content-Type" "text/html"}
+                         :body "<article><h1>Article Three</h1><p>Body three.</p></article>"}}
+                       requests)
+        items (source/discover sys source-cfg)]
+    (is (= #{"1001" "1002" "1003"} (set (mapv :external_id items))))
+    (is (= #{"https://example.atlassian.net/servicedesk/customer/portal/1/topic/topic-a/article/1001"
+             "https://example.atlassian.net/servicedesk/customer/portal/1/topic/topic-a/article/1002"
+             "https://example.atlassian.net/servicedesk/customer/portal/1/article/1003"}
+           (set (mapv :canonical_url items))))
+    (is (every? #(= "jira-service-management" (:source_type %)) items))
+    (is (some #(str/includes? (:body %) "Article Three") items))
+    (is (= 5 (count @requests)))))
 
-                                            "https://example.test/portal/a"
-                                            (page url ["https://example.test/portal/b"])
-
-                                            "https://example.test/portal/b"
-                                            (page url [])))}
-      (fn []
-        (let [items (source/discover
-                     {}
-                     {:id "support"
-                      :type "jira-service-management"
-                      :url "https://example.test/portal"
-                      :browser_restart_after_pages 2})]
-          (is (= 3 (count items)))
-          (is (= [:driver-1 :driver-1 :driver-2] @rendered-with))
-          (is (= [:driver-1 :driver-2] @quits)))))))
-
-(deftest discovery-restarts-browser-after-consecutive-render-failures
-  (let [starts (atom 0)
-        quits (atom [])]
-    (with-redefs-fn {#'jsm/start-driver! (fn [_]
-                                           (keyword (str "driver-" (swap! starts inc))))
-                     #'jsm/quit-driver! (fn [driver]
-                                          (swap! quits conj driver))
-                     #'jsm/render-page! (fn [_ _ url]
-                                          (if (= "https://example.test/portal" url)
-                                            (page url ["https://example.test/portal/a"
-                                                       "https://example.test/portal/b"])
-                                            (source/anomaly :cognitect.anomalies/fault
-                                                            {:type :test/render-failed
-                                                             :canonical-url url})))}
-      (fn []
-        (let [items (source/discover
-                     {}
-                     {:id "support"
-                      :type "jira-service-management"
-                      :url "https://example.test/portal"
-                      :browser_restart_after_failures 2})]
-          (is (= 3 (count items)))
-          (is (= [:driver-1 :driver-2] @quits)))))))
-
-(deftest discovery-retries-blank-render-with-a-fresh-browser
-  (let [starts (atom 0)
-        quits (atom [])
-        calls (atom [])]
-    (with-redefs-fn {#'jsm/start-driver! (fn [_]
-                                           (keyword (str "driver-" (swap! starts inc))))
-                     #'jsm/quit-driver! (fn [driver]
-                                          (swap! quits conj driver))
-                     #'jsm/render-page! (fn [driver _ url]
-                                          (swap! calls conj [driver url])
-                                          (if (= driver :driver-1)
-                                            (assoc (page url []) :body "<body></body>")
-                                            (page url [])))}
-      (fn []
-        (let [items (source/discover
-                     {}
-                     {:id "support"
-                      :type "jira-service-management"
-                      :url "https://example.test/portal"
-                      :browser_restart_after_pages 50})]
-          (is (= 1 (count items)))
-          (is (= "<main><h1>https://example.test/portal</h1><p>Rendered article.</p></main>"
-                 (:body (first items))))
-          (is (= [[:driver-1 "https://example.test/portal"]
-                  [:driver-2 "https://example.test/portal"]]
-                 @calls))
-          (is (= [:driver-1 :driver-2] @quits)))))))
-
-(deftest discovery-retries-blank-render-at-canonical-url
-  (let [starts (atom 0)
-        calls (atom [])]
-    (with-redefs-fn {#'jsm/start-driver! (fn [_]
-                                           (keyword (str "driver-" (swap! starts inc))))
-                     #'jsm/quit-driver! (fn [_])
-                     #'jsm/render-page! (fn [driver _ url]
-                                          (swap! calls conj [driver url])
-                                          (if (= driver :driver-1)
-                                            (assoc (page "https://example.test/canonical" [])
-                                                   :body "<body></body>")
-                                            (page url [])))}
-      (fn []
-        (let [items (source/discover
-                     {}
-                     {:id "support"
-                      :type "jira-service-management"
-                      :url "https://example.test/shim"})]
-          (is (= ["https://example.test/canonical"]
-                 (mapv :canonical_url items)))
-          (is (= [[:driver-1 "https://example.test/shim"]
-                  [:driver-2 "https://example.test/canonical"]]
-                 @calls)))))))
-
-(deftest source-requires-a-start-url
-  (is (thrown-with-msg?
-       clojure.lang.ExceptionInfo
-       #"requires url"
-       (source/discover {} {:id "support"
-                            :type "jira-service-management"}))))
-
-(deftest fetch-returns-rendered-document
-  (let [item (page "https://example.test/portal/a" [])]
+(deftest fetch-returns-api-discovered-body
+  (let [item {:source_id "support"
+              :source_type "jira-service-management"
+              :canonical_url "https://example.atlassian.net/servicedesk/customer/portal/1/article/1001"
+              :body "<article>Already fetched</article>"}]
     (is (= (assoc item :content_type "text/html")
-           (source/fetch {} {:id "support"
-                             :type "jira-service-management"}
-                         item)))))
+           (source/fetch {} source-cfg item)))))
 
-(deftest fetch-rejects-items-without-rendered-body
-  (let [result (source/fetch {} {:id "support"
-                                 :type "jira-service-management"}
-                             {:canonical_url "https://example.test/portal/a"})]
-    (is (source/anomaly? result))
-    (is (= :alida.source.jira-service-management/missing-rendered-body
-           (get-in result [:alida/error :type])))))
+(deftest webdriver-crawl-method-delegates-to-generic-webdriver-source
+  (with-redefs [webdriver/discover-rendered (fn [_ cfg]
+                                              [(select-keys cfg [:type :url])])]
+    (is (= [{:type "webdriver"
+             :url (:url source-cfg)}]
+           (source/discover {} (assoc source-cfg :crawl_method "webdriver"))))))
 
-(deftest fallback-rendering-is-limited-to-article-pages
-  (is (#'jsm/article-url? "https://example.test/servicedesk/customer/portal/7/article/123"))
-  (is (#'jsm/article-url? "https://example.test/servicedesk/customer/portal/7/topic/abc/article/123"))
-  (is (not (#'jsm/article-url? "https://example.test/servicedesk/customer/portal/7/topic/abc")))
-  (is (not (#'jsm/article-url? "https://example.test/servicedesk/customer/portals"))))
+(deftest auto-crawl-method-falls-back-to-webdriver-when-api-context-fails
+  (with-redefs [webdriver/discover-rendered (fn [_ cfg]
+                                              [(select-keys cfg [:type :url])])]
+    (let [sys (fake-http {(:url source-cfg) {:status 200 :body "<html>No payload</html>"}}
+                         (atom []))]
+      (is (= [{:type "webdriver"
+               :url (:url source-cfg)}]
+             (source/discover sys (assoc source-cfg :crawl_method "auto")))))))
 
-(deftest wait-selectors-are-url-aware
-  (let [source-cfg {:content_wait_selectors ["main article"]}]
-    (is (= ["a[href*='/topic/']"]
-           (#'jsm/wait-selectors-for-url source-cfg
-                                         "https://example.test/servicedesk/customer/portals")))
-    (is (= ["a[href*='/article/']"]
-           (#'jsm/wait-selectors-for-url source-cfg
-                                         "https://example.test/servicedesk/customer/portal/7/topic/abc")))
-    (is (= ["iframe"]
-           (#'jsm/wait-selectors-for-url source-cfg
-                                         "https://example.test/servicedesk/customer/portal/7/article/123")))
-    (is (= ["iframe"]
-           (#'jsm/wait-selectors-for-url source-cfg
-                                         "https://example.test/servicedesk/customer/portal/7/topic/abc/article/123")))))
+(deftest api-fetches-articles-in-parallel
+  (let [active (atom 0)
+        max-active (atom 0)
+        latch (java.util.concurrent.CountDownLatch. 2)
+        sys {:alida/http-request
+             (fn [request]
+               (cond
+                 (= (:url request) (:url source-cfg))
+                 {:status 200 :body (portal-page)}
 
-(deftest direct-article-links-keep-topic-context
-  (is (= "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"
-         (#'jsm/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/999"
-          "https://example.test/servicedesk/customer/portal/7/article/123")))
-  (is (= "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"
-         (#'jsm/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/999"
-          "https://example.test/plugins/servlet/servicedesk/customer/confluence/shim/spaces/API/pages/123")))
-  (is (= "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"
-         (#'jsm/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/999"
-          "https://example.test/wiki/spaces/KD/pages/123/Example")))
-  (is (= "https://example.test/servicedesk/customer/portal/7/topic/topic-2/article/123"
-         (#'jsm/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/999"
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-2/article/123")))
-  (is (= "https://example.test/servicedesk/customer/portal/7/article/123"
-         (#'jsm/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/article/999"
-          "https://example.test/servicedesk/customer/portal/7/article/123"))))
+                 (= (:url request) (category-url))
+                 {:status 200 :body (category-response)}
 
-(deftest confluence-links-on-direct-article-pages-become-direct-article-urls
-  (is (= "https://example.test/servicedesk/customer/portal/7/article/123"
-         (#'jsm/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/article/999"
-          "https://example.test/plugins/servlet/servicedesk/customer/confluence/shim/spaces/KD/pages/123/Related")))
-  (is (= "https://example.test/servicedesk/customer/portal/7/article/123"
-         (#'jsm/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/article/999"
-          "https://example.test/wiki/spaces/KD/pages/123/Related"))))
+                 (str/includes? (:url request) "/rest/servicedesk/knowledgebase/latest/articles/view/")
+                 (do
+                   (let [current (swap! active inc)]
+                     (swap! max-active max current)
+                     (.countDown latch)
+                     (.await latch 1 java.util.concurrent.TimeUnit/SECONDS)
+                     (swap! active dec))
+                   {:status 200
+                    :headers {"Content-Type" "text/html"}
+                    :body "<article><h1>Article</h1><p>Body.</p></article>"})
 
-(deftest topic-article-links-also-enqueue-direct-article-urls
-  (is (= "https://example.test/servicedesk/customer/portal/7/article/123"
-         (#'jsm/direct-article-url
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123")))
-  (is (nil? (#'jsm/direct-article-url
-             "https://example.test/servicedesk/customer/portal/7/article/123")))
-  (is (= ["https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"
-          "https://example.test/servicedesk/customer/portal/7/article/123"]
-         (#'jsm/expand-article-url-variants
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"))))
+                 :else
+                 {:status 500 :body "unexpected request"}))}]
+    (is (= 2 (count (source/discover sys source-cfg))))
+    (is (= 2 @max-active))))
 
-(deftest direct-article-frame-readiness-waits-for-related-shim-links
-  (with-redefs [jsm/frame-content-state (fn [_]
-                                          {:relatedHrefCount 2})]
-    (is (#'jsm/frame-related-links-ready? :driver)))
-  (with-redefs [jsm/frame-content-state (fn [_]
-                                          {:relatedHrefCount 1})]
-    (is (not (#'jsm/frame-related-links-ready? :driver)))))
+(deftest api-paginates-category-article-results
+  (let [requests (atom [])
+        cfg (assoc source-cfg
+                   :api_category_page_limit 2
+                   :max_pages 10)
+        responses {"https://example.atlassian.net/servicedesk/customer/portal/1"
+                   {:status 200 :body (portal-page)}
+                   (category-url {:origin "https://example.atlassian.net"
+                                  :workspace-id workspace-id
+                                  :project-id 42
+                                  :topic-id "topic-a"
+                                  :start 0
+                                  :limit 2})
+                   {:status 200
+                    :body (json/write-str {:results [{:id "1001" :title "Article One"}
+                                                     {:id "1002" :title "Article Two"}]})}
+                   (category-url {:origin "https://example.atlassian.net"
+                                  :workspace-id workspace-id
+                                  :project-id 42
+                                  :topic-id "topic-a"
+                                  :start 2
+                                  :limit 2})
+                   {:status 200
+                    :body (json/write-str {:results [{:id "1003" :title "Article Three"}]
+                                           :isLastPage true})}
+                   "https://example.atlassian.net/rest/servicedesk/knowledgebase/latest/articles/view/1001"
+                   {:status 200 :headers {"Content-Type" "text/html"} :body "<article>One</article>"}
+                   "https://example.atlassian.net/rest/servicedesk/knowledgebase/latest/articles/view/1002"
+                   {:status 200 :headers {"Content-Type" "text/html"} :body "<article>Two</article>"}
+                   "https://example.atlassian.net/rest/servicedesk/knowledgebase/latest/articles/view/1003"
+                   {:status 200 :headers {"Content-Type" "text/html"} :body "<article>Three</article>"}}
+        items (source/discover (fake-http responses requests) cfg)]
+    (is (= #{"1001" "1002" "1003"} (set (mapv :external_id items))))
+    (is (= [(category-url {:origin "https://example.atlassian.net"
+                          :workspace-id workspace-id
+                          :project-id 42
+                          :topic-id "topic-a"
+                          :start 0
+                          :limit 2})
+            (category-url {:origin "https://example.atlassian.net"
+                           :workspace-id workspace-id
+                           :project-id 42
+                           :topic-id "topic-a"
+                           :start 2
+                           :limit 2})]
+           (filterv #(str/includes? % "/category/") (mapv :url @requests))))))
 
-(deftest waits-use-current-url-after-redirect
-  (let [selectors (atom nil)]
-    (with-redefs-fn {#'e/get-url (fn [_] "https://example.test/servicedesk/customer/portal/7/article/123")
-                     #'jsm/page-ready? (fn [_] true)
-                     #'jsm/any-selector-present? (fn [_ observed-selectors]
-                                                   (reset! selectors observed-selectors)
-                                                   true)}
-      (fn []
-      (#'jsm/wait-for-page!
-       :driver
-       {:wait_timeout_ms 1
-        :wait_interval_ms 1}
-       "https://example.test/plugins/servlet/servicedesk/customer/confluence/shim/x/abc")
-      (is (= ["iframe"] @selectors))))))
-
-(deftest iframe-content-keeps-outer-url-and-title
-  (is (= {:url "https://example.test/portal/topic/a/article/1"
-          :title "Outer title"
-          :fallback_url nil
-          :body "<main>Inner article</main>"
-          :hrefs ["https://example.test/outer"
-                  "https://example.test/inner"]}
-         (#'jsm/merge-iframe-page
-          {:url "https://example.test/portal/topic/a/article/1"
-           :title "Outer title"
-           :fallback_url nil
-           :body ""
-           :hrefs ["https://example.test/outer"]}
-          {:url "https://example.test/wiki/spaces/kb/pages/1"
-           :title "Inner title"
-           :body "<main>Inner article</main>"
-           :hrefs ["https://example.test/outer"
-                   "https://example.test/inner"]}))))
+(deftest api-builds-separate-contexts-for-multiple-start-urls
+  (let [second-workspace "223e4567-e89b-12d3-a456-426614174000"
+        second-origin "https://second.example.atlassian.net"
+        cfg (assoc source-cfg
+                   :url nil
+                   :start_urls [(:url source-cfg)
+                                (str second-origin "/servicedesk/customer/portal/2")]
+                   :allowed_url_prefixes ["https://example.atlassian.net/servicedesk/customer/portal/1/"
+                                          (str second-origin "/servicedesk/customer/portal/2/")])
+        sys (fake-http {"https://example.atlassian.net/servicedesk/customer/portal/1"
+                        {:status 200 :body (portal-page)}
+                        (category-url)
+                        {:status 200 :body (json/write-str {:results [{:id "1001"}] :isLastPage true})}
+                        "https://example.atlassian.net/rest/servicedesk/knowledgebase/latest/articles/view/1001"
+                        {:status 200 :headers {"Content-Type" "text/html"} :body "<article>One</article>"}
+                        (str second-origin "/servicedesk/customer/portal/2")
+                        {:status 200
+                         :body (portal-page {:portal-id 2
+                                             :project-id 84
+                                             :workspace-id second-workspace
+                                             :origin second-origin
+                                             :topic-id "topic-b"})}
+                        (category-url {:origin second-origin
+                                       :workspace-id second-workspace
+                                       :project-id 84
+                                       :topic-id "topic-b"
+                                       :start 0
+                                       :limit 100})
+                        {:status 200 :body (json/write-str {:results [{:id "2001"}] :isLastPage true})}
+                        (str second-origin "/rest/servicedesk/knowledgebase/latest/articles/view/2001")
+                        {:status 200 :headers {"Content-Type" "text/html"} :body "<article>Two</article>"}}
+                       (atom []))
+        items (source/discover sys cfg)]
+    (is (= #{"https://example.atlassian.net/servicedesk/customer/portal/1/article/1001"
+             "https://second.example.atlassian.net/servicedesk/customer/portal/2/article/2001"}
+           (set (mapv :canonical_url items))))))

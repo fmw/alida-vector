@@ -6,6 +6,7 @@
             [alida.embed.vertex-ai]
             [alida.source.jira-service-management]
             [alida.source.local]
+            [alida.source.webdriver]
             [alida.source.website]
             [alida.verify.azure-openai]
             [alida.verify.openai]

@@ -266,15 +266,31 @@
 (defn- validate-source-concurrency!
   [index]
   (doseq [source (:sources index)
-          :let [max-concurrency (:max_concurrency source)]
+          k [:max_concurrency :api_max_concurrency]
+          :let [max-concurrency (get source k)]
           :when (and (some? max-concurrency) (not (pos-int? max-concurrency)))]
     (throw (ex-info (str "Invalid source config for index " (:name index)
                          ": source " (:id source)
-                         " max_concurrency must be positive")
+                         " " (name k) " must be positive")
                     {:type :alida.config/invalid-source-concurrency
                      :index (:name index)
                      :source (:id source)
+                     :key k
                      :value max-concurrency})))
+  index)
+
+(defn- validate-source-api-page-limit!
+  [index]
+  (doseq [source (:sources index)
+          :let [page-limit (:api_category_page_limit source)]
+          :when (and (some? page-limit) (not (pos-int? page-limit)))]
+    (throw (ex-info (str "Invalid source config for index " (:name index)
+                         ": source " (:id source)
+                         " api_category_page_limit must be positive")
+                    {:type :alida.config/invalid-source-api-page-limit
+                     :index (:name index)
+                     :source (:id source)
+                     :value page-limit})))
   index)
 
 (defn- validate-source-delay!
@@ -352,6 +368,7 @@
     (validate-positive-embedding-options! index)
     (validate-language-config! index)
     (validate-source-concurrency! index)
+    (validate-source-api-page-limit! index)
     (validate-source-delay! index)
     (validate-source-sitemap-depth! index)
     (validate-source-browser-restart! index)

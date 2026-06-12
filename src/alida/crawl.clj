@@ -14,8 +14,7 @@
             [clojure.string :as str]
             [com.climate.claypoole :as cp]
             [next.jdbc :as jdbc])
-  (:import [java.net URI]
-           [java.util.concurrent Callable ExecutorService Future]))
+  (:import [java.net URI]))
 
 (def default-source-concurrency 20)
 (def default-inter-request-delay-ms 0)
@@ -213,16 +212,6 @@
       #(get gates (gate-key source-cfg %)))
     (constantly nil)))
 
-(defn- submit-task!
-  [pool f]
-  (.submit ^ExecutorService pool
-           ^Callable (reify Callable
-                       (call [_] (f)))))
-
-(defn- task-result
-  [task]
-  (.get ^Future task))
-
 (defn- process-discovered-items
   [sys index-cfg source-cfg discovered-items]
   (let [concurrency (source-concurrency source-cfg)
@@ -230,17 +219,11 @@
         gate-for-item (request-gates sys source-cfg delay-ms discovered-items)]
     (if (<= concurrency 1)
       (mapv #(process-discovered sys index-cfg source-cfg gate-for-item %) discovered-items)
-      (let [pool (cp/threadpool concurrency :name "alida-crawl")]
-        (try
-          (let [tasks (mapv #(submit-task!
-                               pool
-                               (fn []
-                                 (process-discovered sys index-cfg source-cfg gate-for-item %)))
-                            discovered-items)]
-            (mapv task-result tasks))
-          (finally
-            (cp/shutdown! pool)
-            nil))))))
+      (cp/with-shutdown! [pool (cp/threadpool concurrency :name "alida-crawl")]
+        (vec (doall
+              (cp/upmap pool
+                        #(process-discovered sys index-cfg source-cfg gate-for-item %)
+                        discovered-items)))))))
 
 (defn- url-preference-score
   [source-cfg document-result]
@@ -271,29 +254,28 @@
 
 (defn- dedupe-documents-by-external-id
   [source-cfg documents]
-  (let [source-cfg (dissoc source-cfg :dedupe_prefer_url_substrings)]
-    (->> documents
-         (reduce (fn [result document-result]
-                   (let [external-id (get-in document-result [:document :external_id])]
-                     (if (seq external-id)
-                       (if-let [existing (get-in result [:by-id external-id])]
-                         (let [preferred (preferred-document source-cfg existing document-result)]
-                           (-> result
-                               (assoc-in [:by-id external-id] preferred)
-                               (update :items
-                                       (fn [items]
-                                         (mapv #(if (= external-id
-                                                       (get-in % [:document :external_id]))
-                                                  preferred
-                                                  %)
-                                               items)))))
+  (->> documents
+       (reduce (fn [result document-result]
+                 (let [external-id (get-in document-result [:document :external_id])]
+                   (if (seq external-id)
+                     (if-let [existing (get-in result [:by-id external-id])]
+                       (let [preferred (preferred-document source-cfg existing document-result)]
                          (-> result
-                             (assoc-in [:by-id external-id] document-result)
-                             (update :items conj document-result)))
-                       (update result :items conj document-result))))
-                 {:by-id {}
-                  :items []})
-         :items)))
+                             (assoc-in [:by-id external-id] preferred)
+                             (update :items
+                                     (fn [items]
+                                       (mapv #(if (= external-id
+                                                     (get-in % [:document :external_id]))
+                                                preferred
+                                                %)
+                                             items)))))
+                       (-> result
+                           (assoc-in [:by-id external-id] document-result)
+                           (update :items conj document-result)))
+                     (update result :items conj document-result))))
+               {:by-id {}
+                :items []})
+       :items))
 
 (defn- dedupe-documents-by-content
   [source-cfg documents]
