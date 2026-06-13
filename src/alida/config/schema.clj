@@ -49,7 +49,7 @@
 (def Source
   [:map {:closed false}
    [:id :string]
-   [:type [:enum "website" "jira-service-management" "s3" "gcs" "local"]]
+   [:type [:enum "website" "jira-service-management" "webdriver" "s3" "gcs" "local"]]
    [:language {:optional true} SourceLanguage]
    [:path {:optional true} :string]
    [:paths {:optional true} [:sequential :string]]
@@ -67,6 +67,9 @@
    [:strip_text {:optional true} [:sequential :string]]
    [:dedupe_content {:optional true} :boolean]
    [:dedupe_prefer_url_substrings {:optional true} [:sequential :string]]
+   [:crawl_method {:optional true} [:enum "api" "webdriver" "auto"]]
+   [:api_max_concurrency {:optional true} :int]
+   [:api_category_page_limit {:optional true} :int]
    [:content_wait_selectors {:optional true} [:sequential :string]]
    [:browser_args {:optional true} [:sequential :string]]
    [:browser_restart_after_pages {:optional true} :int]

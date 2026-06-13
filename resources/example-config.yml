@@ -60,6 +60,7 @@ indexes:
             - meta[property=og:locale]
       - id: support
         type: jira-service-management
+        crawl_method: api
         url: https://example.atlassian.net/servicedesk/customer/portal/1
         allowed_url_prefixes:
           - https://example.atlassian.net/servicedesk/customer/portal/1/topic/
@@ -68,13 +69,15 @@ indexes:
         denied_urls: []
         denied_url_prefixes: []
         max_pages: 1000
+        api_max_concurrency: 20
+        api_category_page_limit: 100
+        max_concurrency: 4
         browser_restart_after_pages: 50
         browser_restart_after_failures: 2
         progress_log_every_pages: 25
         dedupe_content: true
         dedupe_prefer_url_substrings:
           - /topic/
-        max_concurrency: 1
         inter_request_delay_ms: 100
         content_wait_selectors:
           - a[href*="/article/"]
