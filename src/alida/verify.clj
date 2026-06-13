@@ -169,12 +169,25 @@
                           :empty_or_short_document_count empty-or-short-count
                           :item_count item-count}))))
 
+(defn- check-zero-documents
+  "Non-disableable: a run that produced no documents is almost always a broken
+   crawl (bad start URL, source-structure change, filter misconfig). Activating
+   it would empty the live index, so fail rather than letting an empty run earn
+   a default pass. This check has no configurable threshold."
+  [crawl-summary]
+  (when (zero? (:document_count crawl-summary 0))
+    (finding :zero_documents
+             "fail"
+             "Run produced zero documents"
+             {:document_count (:document_count crawl-summary 0)})))
+
 (defn deterministic-gate
   [{:keys [deterministic_thresholds]} crawl-summary run-diff]
   (let [thresholds deterministic_thresholds
         diff-summary (:summary run-diff)
         findings (vec (keep identity
-                            [(check-max-removed-absolute (:max_removed_absolute thresholds) diff-summary)
+                            [(check-zero-documents crawl-summary)
+                             (check-max-removed-absolute (:max_removed_absolute thresholds) diff-summary)
                              (check-max-removed-percentage (:max_removed_percentage thresholds) diff-summary)
                              (check-max-changed-percentage (:max_changed_percentage thresholds) diff-summary)
                              (check-max-item-failure-percentage (:max_item_failure_percentage thresholds)

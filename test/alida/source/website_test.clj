@@ -1,6 +1,7 @@
 (ns alida.source.website-test
   (:require [alida.source :as source]
             [alida.source.website]
+            [alida.test-helpers :refer [fake-http]]
             [clojure.test :refer [deftest is]]))
 
 (def sitemap
@@ -37,15 +38,6 @@
         <sitemapindex>
           <sitemap><loc>" url "</loc></sitemap>
         </sitemapindex>"))
-
-(defn- fake-http
-  [responses requests]
-  {:alida/http-request (fn [request]
-                         (swap! requests conj request)
-                         (let [response (get responses (:url request))]
-                           (or response
-                               {:status 500
-                                :body "missing fake response"})))})
 
 (deftest discovers-website-urls-from-sitemap-with-prefix-filters
   (let [requests (atom [])

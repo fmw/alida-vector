@@ -88,15 +88,20 @@
                         (.getBytes (str "alida:index:" index-name) "UTF-8"))]
     (.getLong (ByteBuffer/wrap digest))))
 
+(def default-max-pool-size 10)
+
 (defn datasource
-  [{:keys [jdbc_url user username password]}]
+  [{:keys [jdbc_url user username password max_pool_size]}]
   (let [cfg (HikariConfig.)]
     (.setJdbcUrl cfg jdbc_url)
     (when (or username user)
       (.setUsername cfg (or username user)))
     (when password
       (.setPassword cfg password))
-    (.setMaximumPoolSize cfg 5)
+    ;; Must comfortably exceed per-run concurrency: a crawl holds one connection
+    ;; for its advisory lock plus a transaction connection plus reuse/diff queries,
+    ;; and concurrent index crawls multiply that.
+    (.setMaximumPoolSize cfg (or max_pool_size default-max-pool-size))
     (.setPoolName cfg "alida-vector")
     (HikariDataSource. cfg)))
 
@@ -191,28 +196,55 @@
     (jsonb (or metadata {}))]
    jdbc-opts))
 
+(defn- document-params
+  [run source-cfg document]
+  [(:id run)
+   (:id source-cfg)
+   (:external_id document)
+   (:canonical_url document)
+   (:title document)
+   (:locale document)
+   (:normalized_content_hash document)
+   (:raw_content_hash document)
+   (jsonb {:content_type (:content_type document)
+           :html_locale (:html_locale document)
+           :language_source (:language_source document)
+           :language_confidence (:language_confidence document)})])
+
 (defn insert-document!
   [connectable run source-cfg document]
   (jdbc/execute-one!
    connectable
-   ["INSERT INTO alida_documents
-       (run_id, source_id, external_id, canonical_url, title, locale,
-        normalized_content_hash, raw_content_hash, metadata)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-     RETURNING *"
-    (:id run)
-    (:id source-cfg)
-    (:external_id document)
-    (:canonical_url document)
-    (:title document)
-    (:locale document)
-    (:normalized_content_hash document)
-    (:raw_content_hash document)
-    (jsonb {:content_type (:content_type document)
-            :html_locale (:html_locale document)
-            :language_source (:language_source document)
-            :language_confidence (:language_confidence document)})]
+   (into ["INSERT INTO alida_documents
+            (run_id, source_id, external_id, canonical_url, title, locale,
+             normalized_content_hash, raw_content_hash, metadata)
+          VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+          RETURNING *"]
+         (document-params run source-cfg document))
    jdbc-opts))
+
+;; ~7200 docs/insert keeps total bound parameters (9 each) under Postgres' 65535
+;; protocol limit with comfortable headroom.
+(def ^:private document-insert-batch-size 5000)
+
+(defn insert-documents!
+  "Insert all documents for a source in batched multi-row INSERTs (rather than one
+   round trip per document) and return the inserted rows in input order. Postgres
+   preserves VALUES order in RETURNING, so the rows line up with the input."
+  [connectable run source-cfg documents]
+  (let [row-placeholder "(?, ?, ?, ?, ?, ?, ?, ?, ?)"]
+    (vec
+     (mapcat
+      (fn [batch]
+        (let [sql (str "INSERT INTO alida_documents
+                          (run_id, source_id, external_id, canonical_url, title, locale,
+                           normalized_content_hash, raw_content_hash, metadata)
+                        VALUES "
+                       (str/join ", " (repeat (count batch) row-placeholder))
+                       " RETURNING *")
+              params (mapcat #(document-params run source-cfg %) batch)]
+          (jdbc/execute! connectable (into [sql] params) jdbc-opts)))
+      (partition-all document-insert-batch-size documents)))))
 
 (defn list-run-documents
   [connectable value]

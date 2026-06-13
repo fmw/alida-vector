@@ -263,6 +263,44 @@
                                      (:locale source-language)))))
   index)
 
+(defn- source-has-any?
+  [source ks]
+  (some #(let [v (get source %)]
+           (if (sequential? v) (seq v) (some? v)))
+        ks))
+
+(defn- validate-source-requirements!
+  "Enforce per-source-type required fields that are OR-groups (and so cannot be
+   expressed as single required keys in the Malli schema): a website needs a
+   sitemap, JSM/webdriver need a start URL, and a local source needs a path.
+   Checking here turns a misconfigured source into a load-time error rather than
+   a crawl-time failure (or, worse, a silent zero-document run)."
+  [index]
+  (doseq [source (:sources index)
+          :let [missing (case (:type source)
+                          "website"
+                          (when-not (source-has-any? source [:sitemap_url :sitemap_urls])
+                            "sitemap_url or sitemap_urls")
+
+                          ("jira-service-management" "webdriver")
+                          (when-not (source-has-any? source [:url :start_url :start_urls])
+                            "url, start_url, or start_urls")
+
+                          "local"
+                          (when-not (source-has-any? source [:path :paths :root])
+                            "path, paths, or root")
+
+                          nil)]
+          :when missing]
+    (throw (ex-info (str "Invalid source config for index " (:name index)
+                         ": source " (:id source) " (" (:type source) ") requires " missing)
+                    {:type :alida.config/missing-source-requirement
+                     :index (:name index)
+                     :source (:id source)
+                     :source-type (:type source)
+                     :required missing})))
+  index)
+
 (defn- validate-source-concurrency!
   [index]
   (doseq [source (:sources index)
@@ -367,6 +405,7 @@
     (validate-required-embedding-keys! index)
     (validate-positive-embedding-options! index)
     (validate-language-config! index)
+    (validate-source-requirements! index)
     (validate-source-concurrency! index)
     (validate-source-api-page-limit! index)
     (validate-source-delay! index)

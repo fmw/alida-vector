@@ -14,6 +14,26 @@
    :body (str "<main><h1>" url "</h1><p>Rendered article.</p></main>")
    :hrefs hrefs})
 
+(deftest navigable?-enforces-host-allowlist-and-scope-rules
+  (let [navigable? #'webdriver/navigable?
+        source-cfg {:id "support"
+                    :type "webdriver"
+                    :url "https://example.test/portal"
+                    :allowed_url_prefixes ["https://example.test/portal/"]
+                    :denied_url_prefixes ["https://example.test/portal/private/"]
+                    :denied_urls ["https://example.test/portal/secret"]
+                    :internal_link_hosts ["example.test"]}]
+    ;; in-scope, trusted host
+    (is (navigable? source-cfg "https://example.test/portal/article/1"))
+    ;; off-host (SSRF target) blocked even though no prefix rule would match
+    (is (not (navigable? source-cfg "http://169.254.169.254/latest/meta-data")))
+    ;; same host but outside allowed_url_prefixes
+    (is (not (navigable? source-cfg "https://example.test/admin/console")))
+    ;; same host, in allowed prefix, but explicitly denied
+    (is (not (navigable? source-cfg "https://example.test/portal/private/x")))
+    (is (not (navigable? source-cfg "https://example.test/portal/secret")))
+    (is (not (navigable? source-cfg nil)))))
+
 (deftest discovers-rendered-pages-and-follows-allowed-links
   (let [visited (atom [])
         quit? (atom false)]
