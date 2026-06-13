@@ -73,7 +73,7 @@
   [sys millis]
   (if-let [sleep-fn (:alida/sleep sys)]
     (sleep-fn millis)
-    (Thread/sleep millis)))
+    (java.util.concurrent.locks.LockSupport/parkNanos (* (long millis) 1000000))))
 
 (defn- random-int
   [sys bound]

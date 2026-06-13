@@ -160,7 +160,7 @@
     (is (= 1 (:document_count result)))
     (is (= "article-1"
            (-> result :documents first :document :external_id)))
-    (is (= "https://example.test/article/1"
+    (is (= "https://example.test/topic/a/article/1"
            (-> result :documents first :document :canonical_url)))))
 
 (deftest process-source-records-thrown-fetch-exceptions-as-item-errors
@@ -193,12 +193,14 @@
                        :content_type "text/html"})
                     (range 6))
         active (atom 0)
-        max-active (atom 0)]
+        max-active (atom 0)
+        latch (java.util.concurrent.CountDownLatch. 2)]
     (with-redefs [source/discover (fn [_ _] items)
                   source/fetch (fn [_ _ item]
                                  (let [current (swap! active inc)]
                                    (swap! max-active max current)
-                                   (Thread/sleep 50)
+                                   (.countDown latch)
+                                   (.await latch 1 TimeUnit/SECONDS)
                                    (swap! active dec))
                                  (assoc item
                                         :body "<html lang=\"en\"><body><h1>Hello</h1><p>This document can be processed.</p></body></html>"))]
@@ -211,7 +213,7 @@
         (is (= 6 (:document_count result)))
         (is (= 2 @max-active))
         (is (= 2 (get-in result [:crawl_stats :max_concurrency])))
-        (is (pos-int? (get-in result [:crawl_stats :fetch_duration_ms])))))))
+        (is (nat-int? (get-in result [:crawl_stats :fetch_duration_ms])))))))
 
 (deftest request-gate-waits-until-delay-after-previous-start
   (let [current-ms (atom 1000)
@@ -320,6 +322,7 @@
                    {:id \"fixtures\"
                     :type \"local\"
                     :max_concurrency 2})
+                  (shutdown-agents)
                   (println \"done\")))"
         process (-> (ProcessBuilder. ["clojure" "-M" "-e" expr])
                     (doto

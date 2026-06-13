@@ -1,4 +1,5 @@
-{:linters
+{:lint-as {com.climate.claypoole/with-shutdown! clojure.core/let}
+ :linters
  {:unresolved-symbol
   {:exclude [(integrant.core/init-key)
              (integrant.core/halt-key!)]}}}
