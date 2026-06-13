@@ -291,16 +291,26 @@
   (url/allowed? (url/source-allow-config source-cfg (seq (allowed-url-prefixes source-cfg)))
                 url))
 
-(defn- navigable?
-  "SSRF guard for URLs sourced from untrusted rendered content (iframe src,
-   jsonPayload fallback). The host must be one of the source's trusted hosts —
-   the start-URL hosts plus any configured internal_link_hosts. This permits
-   same-host navigation (e.g. the Confluence iframe) while blocking redirection
-   to internal/metadata endpoints."
+(defn- host-allowed?
   [source-cfg url]
   (boolean
    (when-let [h (url/host url)]
      (contains? (set (internal-link-hosts source-cfg)) h))))
+
+(defn- navigable?
+  "SSRF + scope guard for URLs sourced from untrusted rendered content (iframe
+   src, jsonPayload fallback). Such a URL must clear both checks:
+
+   1. The host is one of the source's trusted hosts (start-URL hosts plus any
+      configured internal_link_hosts) — blocks redirection to internal/metadata
+      endpoints.
+   2. It passes the same allow/deny scope rules (`allowed_url_prefixes`,
+      `denied_urls`, `denied_url_prefixes`) the discovery queue applies, so a
+      trusted page cannot steer navigation to a same-host path that the normal
+      crawl would reject."
+  [source-cfg url]
+  (and (host-allowed? source-cfg url)
+       (url-allowed? source-cfg url)))
 
 (defn- driver-options
   [source-cfg]
