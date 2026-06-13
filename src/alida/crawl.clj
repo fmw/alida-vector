@@ -431,8 +431,9 @@
                        {:document_count (:document_count source-result)
                         :error_count (:error_count source-result)
                         :metadata (source-metadata source-result)})
-    (doseq [{:keys [document chunks]} (:documents source-result)]
-      (let [document-row (db/insert-document! tx run source-cfg document)]
+    (let [document-results (:documents source-result)
+          document-rows (db/insert-documents! tx run source-cfg (map :document document-results))]
+      (doseq [[document-row {:keys [chunks]}] (map vector document-rows document-results)]
         (db/insert-chunks! tx dimensions run source-cfg document-row chunks)))))
 
 (defn- persist-results!
@@ -531,7 +532,13 @@
                         (verify/strictest-verdict
                          (:deterministic_verdict deterministic-verification)
                          (:verdict llm-result))
-                        (:deterministic_verdict deterministic-verification))
+                        ;; With LLM verification disabled, the gate is incomplete:
+                        ;; the deterministic checks ran but no LLM review did. Such
+                        ;; a run must not earn an auto-activating "pass", so cap it
+                        ;; at "caution" (still activatable manually with --allow-caution).
+                        (verify/strictest-verdict
+                         (:deterministic_verdict deterministic-verification)
+                         "caution"))
         verification (merge
                       {:provider (if llm-result (:provider verification-cfg) "disabled")
                        :model (if llm-result (verifier-model verification-cfg) "llm-verification-disabled")
@@ -591,10 +598,12 @@
                 crawl-stats (dissoc (aggregate-stats (map :crawl_stats source-results))
                                     :max_concurrency)]
             (db/update-run-status! ds (:id run) "embedding")
-            (pgvector/ensure-run-partition! ds (embedding-dimensions index-cfg) (:id run))
+            (pgvector/create-run-partition! ds (embedding-dimensions index-cfg) (:id run))
             (let [{:keys [source-results stats]} (attach-embeddings sys ds index-cfg source-results)
                   persist-started (now-ns)]
               (persist-results! ds run index-cfg structural-config-hash source-results)
+              ;; Build the HNSW index once the partition is fully loaded.
+              (pgvector/create-run-index! ds (embedding-dimensions index-cfg) (:id run))
               (let [persist-duration-ms (elapsed-ms persist-started)
                     phase-stats-before-verification (merge crawl-stats
                                                            {:crawl_duration_ms crawl-duration-ms

@@ -3,7 +3,8 @@ FROM debian:trixie-slim
 ENV ALIDA_VECTOR_HOME=/opt/alida-vector \
     ALIDA_VECTOR_JAR=/opt/alida-vector/alida-vector.jar \
     CHROME_BIN=/usr/bin/chromium \
-    CHROMEDRIVER_BIN=/usr/bin/chromedriver
+    CHROMEDRIVER_BIN=/usr/bin/chromedriver \
+    JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75.0
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends \

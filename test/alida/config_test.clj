@@ -1,5 +1,6 @@
 (ns alida.config-test
   (:require [alida.config :as config]
+            [clj-yaml.core]
             [clojure.test :refer [deftest is testing]]))
 
 (def valid-config
@@ -19,6 +20,36 @@
               :sources [{:id "site"
                          :type "website"
                          :sitemap_url "https://example.test/sitemap.xml"}]}]})
+
+(defn- load-from-map
+  "Round-trip a config map through YAML so it exercises the full load-config path.
+   Ensures the embedding has an api_key so source-level checks are reached."
+  [cfg]
+  (let [cfg (assoc-in cfg [:indexes 0 :embedding :api_key] "test-key")
+        file (java.io.File/createTempFile "alida-config" ".yml")]
+    (try
+      (spit file (clj-yaml.core/generate-string cfg))
+      (config/load-config (.getPath file))
+      (finally (.delete file)))))
+
+(deftest rejects-misspelled-source-key
+  (testing "a typo in a source key fails validation instead of being ignored"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo #"(?i)disallowed key|invalid"
+         (load-from-map (assoc-in valid-config [:indexes 0 :sources 0 :sitemap_urll]
+                                  "https://example.test/sitemap.xml"))))))
+
+(deftest rejects-website-source-without-sitemap
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo #"sitemap_url or sitemap_urls"
+       (load-from-map (assoc-in valid-config [:indexes 0 :sources 0]
+                                {:id "site" :type "website"})))))
+
+(deftest rejects-jsm-source-without-start-url
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo #"url, start_url, or start_urls"
+       (load-from-map (assoc-in valid-config [:indexes 0 :sources 0]
+                                {:id "support" :type "jira-service-management"})))))
 
 (deftest structural-hash-redacts-secrets
   (testing "secret values do not change the structural hash"
@@ -62,6 +93,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (= {:jdbc_url "jdbc:postgresql://localhost/alida"
               :user "alida"}
@@ -93,6 +125,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"max_tokens \* safety_multiplier"
@@ -128,6 +161,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"Unsupported pgvector dimensions"
@@ -158,6 +192,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"provider azure-openai requires endpoint"
@@ -188,6 +223,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"provider openai requires api_key"
@@ -217,6 +253,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (= "noop"
              (-> (config/load-config (.getPath file))
@@ -250,6 +287,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"provider openai requires api_key"
@@ -281,6 +319,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"provider azure-openai requires endpoint"
@@ -312,6 +351,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"provider vertex-ai requires project"
@@ -343,6 +383,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (false? (-> (config/load-config (.getPath file))
                       :verification
@@ -375,6 +416,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"max_batch_size must be positive"
@@ -407,6 +449,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"inter_batch_delay_ms must be zero or positive"
@@ -440,6 +483,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"percentage thresholds must be fractions"
@@ -473,6 +517,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"max_removed_absolute"
@@ -505,6 +550,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"max_prompt_tokens must be positive"
@@ -539,6 +585,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
         language:
           mode: auto
           allowed: [en, nl]
@@ -578,6 +625,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"unsupported locale xx"
@@ -612,6 +660,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
 ")
       (is (thrown-with-msg? clojure.lang.ExceptionInfo
                             #"fallback nl is not in allowed locales"
@@ -643,6 +692,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
         language:
           mode: configured
 ")
@@ -678,6 +728,7 @@ indexes:
     sources:
       - id: site
         type: website
+        sitemap_url: https://example.test/sitemap.xml
         language:
           allowed: [fr]
 ")

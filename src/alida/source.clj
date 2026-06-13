@@ -1,5 +1,6 @@
 (ns alida.source
-  (:require [hato.client :as http]))
+  (:require [clojure.string]
+            [hato.client :as http]))
 
 (def default-request-timeout-ms 60000)
 (def max-error-body-length 1024)
@@ -47,6 +48,20 @@
   [status]
   (<= 200 status 299))
 
+(defn header
+  "Case-insensitive lookup of an HTTP response header value."
+  [response header-name]
+  (let [headers (:headers response)]
+    (or (get headers header-name)
+        (get headers (clojure.string/lower-case header-name)))))
+
+(defn status-category
+  "Map an HTTP status to a cognitect anomaly category (404 -> not-found, else fault)."
+  [status]
+  (case status
+    404 :cognitect.anomalies/not-found
+    :cognitect.anomalies/fault))
+
 (defn error-response-details
   [response]
   (let [body (:body response)
@@ -57,6 +72,16 @@
                           (str (subs body 0 max-error-body-length) "...")
                           body))
       truncated? (assoc :body_truncated true))))
+
+(defn fetch-anomaly
+  "Build a fetch-failure anomaly from an unsuccessful response: anomaly category
+   derived from the status, merged with the caller's details (which should carry
+   a connector-specific :type) plus a truncated response body."
+  [response details]
+  (anomaly (status-category (:status response))
+           (merge details
+                  {:status (:status response)}
+                  (error-response-details response))))
 
 (defn require-success!
   [response context]
