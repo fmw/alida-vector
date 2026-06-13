@@ -345,13 +345,15 @@
                           :verification (db/get-verification ds (:run_id summary))})))))]
     (if (= :skipped result)
       (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
-      (testing "disabled LLM verification uses deterministic verdict as final verdict"
+      (testing "disabled LLM verification caps the final verdict at caution"
         (is (= "complete" (get-in result [:run :lifecycle_status])))
-        (is (= "pass" (get-in result [:run :verification_verdict])))
+        ;; Deterministic checks pass, but with the LLM leg disabled the run must
+        ;; not earn an auto-activating "pass" — it is capped at "caution".
+        (is (= "caution" (get-in result [:run :verification_verdict])))
         (is (= "disabled" (get-in result [:verification :provider])))
         (is (= "pass" (get-in result [:verification :deterministic_verdict])))
         (is (nil? (get-in result [:verification :llm_verdict])))
-        (is (= "pass" (get-in result [:verification :final_verdict])))
+        (is (= "caution" (get-in result [:verification :final_verdict])))
         (is (= "LLM verification was disabled by config."
                (get-in result [:verification :reasoning])))))))
 

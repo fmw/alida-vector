@@ -59,6 +59,19 @@
     (is (= "pass" (:deterministic_verdict result)))
     (is (= [] (:deterministic_findings result)))))
 
+(deftest deterministic-gate-fails-zero-document-run
+  (let [result (verify/deterministic-gate
+                {:deterministic_thresholds {:max_removed_absolute 25}}
+                {:document_count 0
+                 :error_count 0}
+                {:summary {:previous_document_count 0
+                           :current_document_count 0
+                           :removed_count 0
+                           :changed_count 0}})]
+    (is (= "fail" (:deterministic_verdict result))
+        "an empty run must not earn a default pass")
+    (is (some #(= :zero_documents (:check %)) (:deterministic_findings result)))))
+
 (deftest build-prompt-spotlights-untrusted-diff-content
   (let [prompt (verify/build-prompt
                 {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"

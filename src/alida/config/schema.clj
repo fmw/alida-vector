@@ -9,18 +9,18 @@
    [:max_empty_or_short_document_percentage {:optional true} :double]])
 
 (def Chunking
-  [:map
+  [:map {:closed true}
    [:max_input_tokens :int]
    [:max_tokens :int]
    [:safety_multiplier :double]])
 
 (def IndexLanguages
-  [:map {:closed false}
+  [:map {:closed true}
    [:allowed {:optional true} [:sequential :string]]
    [:fallback {:optional true} :string]])
 
 (def SourceLanguage
-  [:map {:closed false}
+  [:map {:closed true}
    [:mode {:optional true} [:enum "auto" "html" "detect" "configured"]]
    [:allowed {:optional true} [:sequential :string]]
    [:locale {:optional true} :string]
@@ -46,47 +46,108 @@
    [:inter_batch_delay_ms {:optional true} :int]
    [:api_key {:optional true} :string]])
 
-(def Source
-  [:map {:closed false}
-   [:id :string]
-   [:type [:enum "website" "jira-service-management" "webdriver" "s3" "gcs" "local"]]
+;; Per-type source schemas. Each is a closed map so that a misspelled or
+;; type-inappropriate key (e.g. `sitemap_urll`, or `sitemap_url` on a local
+;; source) fails validation at load time instead of being silently ignored.
+;; The "at least one of url/start_url/start_urls" and sitemap/path requirements
+;; are enforced in alida.config because they are OR-groups, not single keys.
+
+(def ^:private common-source-entries
+  ;; Keys read for every source type by the shared crawl pipeline.
+  [[:id :string]
    [:language {:optional true} SourceLanguage]
-   [:path {:optional true} :string]
-   [:paths {:optional true} [:sequential :string]]
-   [:root {:optional true} :string]
-   [:include_extensions {:optional true} [:sequential :string]]
-   [:url {:optional true} :string]
-   [:start_url {:optional true} :string]
-   [:start_urls {:optional true} [:sequential :string]]
-   [:sitemap_url {:optional true} :string]
-   [:sitemap_urls {:optional true} [:sequential :string]]
-   [:allowed_url_prefixes {:optional true} [:sequential :string]]
-   [:denied_urls {:optional true} [:sequential :string]]
-   [:denied_url_prefixes {:optional true} [:sequential :string]]
    [:remove_selectors {:optional true} [:sequential :string]]
    [:strip_text {:optional true} [:sequential :string]]
    [:dedupe_content {:optional true} :boolean]
    [:dedupe_prefer_url_substrings {:optional true} [:sequential :string]]
-   [:crawl_method {:optional true} [:enum "api" "webdriver" "auto"]]
-   [:api_max_concurrency {:optional true} :int]
-   [:api_category_page_limit {:optional true} :int]
-   [:content_wait_selectors {:optional true} [:sequential :string]]
+   [:max_pages {:optional true} :int]
+   [:max_concurrency {:optional true} :int]
+   [:inter_request_delay_ms {:optional true} :int]])
+
+(def ^:private url-crawl-entries
+  [[:allowed_url_prefixes {:optional true} [:sequential :string]]
+   [:denied_urls {:optional true} [:sequential :string]]
+   [:denied_url_prefixes {:optional true} [:sequential :string]]])
+
+(def ^:private start-url-entries
+  [[:url {:optional true} :string]
+   [:start_url {:optional true} :string]
+   [:start_urls {:optional true} [:sequential :string]]])
+
+(def ^:private webdriver-entries
+  [[:content_wait_selectors {:optional true} [:sequential :string]]
    [:browser_args {:optional true} [:sequential :string]]
    [:browser_restart_after_pages {:optional true} :int]
    [:browser_restart_after_failures {:optional true} :int]
    [:progress_log_every_pages {:optional true} :int]
    [:internal_link_hosts {:optional true} [:sequential :string]]
    [:preserve_external_links {:optional true} :boolean]
-   [:max_pages {:optional true} :int]
-   [:max_concurrency {:optional true} :int]
-   [:inter_request_delay_ms {:optional true} :int]
-   [:max_sitemap_depth {:optional true} :int]
+   [:render_profile {:optional true} :string]
    [:page_load_timeout_seconds {:optional true} :int]
    [:wait_timeout_ms {:optional true} :int]
    [:wait_interval_ms {:optional true} :int]
+   [:iframe_related_links_timeout_ms {:optional true} :int]
    [:url_stabilization_ms {:optional true} :int]
    [:url_stabilization_attempts {:optional true} :int]
    [:url_stabilization_stable_count {:optional true} :int]])
+
+(defn- source-schema
+  [type-values & entry-groups]
+  (into [:map {:closed true}
+         (into [:type] [(into [:enum] type-values)])]
+        (apply concat entry-groups)))
+
+(def WebsiteSource
+  (source-schema ["website"]
+                 common-source-entries
+                 url-crawl-entries
+                 [[:sitemap_url {:optional true} :string]
+                  [:sitemap_urls {:optional true} [:sequential :string]]
+                  [:max_sitemap_depth {:optional true} :int]]))
+
+(def JiraServiceManagementSource
+  (source-schema ["jira-service-management"]
+                 common-source-entries
+                 url-crawl-entries
+                 start-url-entries
+                 webdriver-entries
+                 [[:crawl_method {:optional true} [:enum "api" "webdriver" "auto"]]
+                  [:api_max_concurrency {:optional true} :int]
+                  [:api_category_page_limit {:optional true} :int]]))
+
+(def WebdriverSource
+  (source-schema ["webdriver"]
+                 common-source-entries
+                 url-crawl-entries
+                 start-url-entries
+                 webdriver-entries))
+
+(def LocalSource
+  (source-schema ["local"]
+                 common-source-entries
+                 [[:path {:optional true} :string]
+                  [:paths {:optional true} [:sequential :string]]
+                  [:root {:optional true} :string]
+                  [:include_extensions {:optional true} [:sequential :string]]]))
+
+(def ObjectStorageSource
+  (source-schema ["s3" "gcs"]
+                 common-source-entries
+                 [[:bucket {:optional true} :string]
+                  [:prefix {:optional true} :string]
+                  [:region {:optional true} :string]
+                  [:project_id {:optional true} :string]
+                  [:include_globs {:optional true} [:sequential :string]]
+                  [:exclude_globs {:optional true} [:sequential :string]]]))
+
+(def Source
+  [:multi {:dispatch :type}
+   ["website" WebsiteSource]
+   ["jira-service-management" JiraServiceManagementSource]
+   ["webdriver" WebdriverSource]
+   ["local" LocalSource]
+   ["s3" ObjectStorageSource]
+   ["gcs" ObjectStorageSource]])
 
 (def Verification
   [:map
@@ -107,7 +168,7 @@
    [:deterministic_thresholds {:optional true} DeterministicThresholds]])
 
 (def Notifications
-  [:map {:closed false}
+  [:map {:closed true}
    [:slack_webhook_url {:optional true} :string]])
 
 (def Database
@@ -115,7 +176,8 @@
    [:jdbc_url :string]
    [:user {:optional true} :string]
    [:username {:optional true} :string]
-   [:password {:optional true} :string]])
+   [:password {:optional true} :string]
+   [:max_pool_size {:optional true} :int]])
 
 (def MetadataStorage
   [:map
@@ -123,7 +185,8 @@
    [:jdbc_url :string]
    [:user {:optional true} :string]
    [:username {:optional true} :string]
-   [:password {:optional true} :string]])
+   [:password {:optional true} :string]
+   [:max_pool_size {:optional true} :int]])
 
 (def VectorStorage
   [:map
@@ -135,7 +198,7 @@
    [:vectors VectorStorage]])
 
 (def Index
-  [:map
+  [:map {:closed true}
    [:name :string]
    [:auto_activate {:optional true} :boolean]
    [:languages {:optional true} IndexLanguages]
@@ -144,7 +207,7 @@
    [:sources [:sequential Source]]])
 
 (def Config
-  [:map {:closed false}
+  [:map {:closed true}
    [:database {:optional true} Database]
    [:storage {:optional true} Storage]
    [:verification Verification]

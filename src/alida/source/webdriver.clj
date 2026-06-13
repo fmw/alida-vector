@@ -1,11 +1,11 @@
 (ns alida.source.webdriver
   (:require [alida.source :as source]
+            [alida.url :as url]
             [clojure.string :as str]
             [com.climate.claypoole :as cp]
             [com.brunobonacci.mulog :as u]
             [etaoin.api :as e])
-  (:import [java.net URI]
-           [org.jsoup Jsoup]))
+  (:import [org.jsoup Jsoup]))
 
 (def default-max-pages 1000)
 (def default-page-load-timeout-seconds 30)
@@ -33,7 +33,6 @@
   ["--no-sandbox"
    "--disable-dev-shm-usage"
    "--disable-gpu"
-   "--disable-web-security"
    "--disable-blink-features=AutomationControlled"
    "--blink-settings=imagesEnabled=false"
    "--disable-plugins"
@@ -163,25 +162,6 @@
       (when-let [url (:start_url source-cfg)] [url])
       (when-let [url (:url source-cfg)] [url])))
 
-(defn- url-host
-  [url]
-  (try
-    (some-> (URI. url) .getHost str/lower-case)
-    (catch Exception _
-      nil)))
-
-(defn- url-origin
-  [url]
-  (try
-    (let [uri (URI. url)
-          scheme (.getScheme uri)
-          host (.getHost uri)
-          port (.getPort uri)]
-      (when (and scheme host)
-        (str scheme "://" host (when (not= -1 port) (str ":" port)))))
-    (catch Exception _
-      nil)))
-
 (defn- max-pages
   [source-cfg]
   (or (:max_pages source-cfg)
@@ -244,58 +224,26 @@
   (vec
    (distinct
     (remove str/blank?
-            (concat (keep url-host (source-urls source-cfg))
+            (concat (keep url/host (source-urls source-cfg))
                     (:internal_link_hosts source-cfg))))))
 
 (defn- allowed-url-prefixes
   [source-cfg]
   (or (seq (:allowed_url_prefixes source-cfg))
-      (keep url-origin (source-urls source-cfg))))
-
-(defn- normalize-url
-  [base-url href]
-  (try
-    (let [base (URI. base-url)
-          resolved (.normalize (.resolve base href))
-          normalized (URI. (.getScheme resolved)
-                           (.getUserInfo resolved)
-                           (.getHost resolved)
-                           (.getPort resolved)
-                           (.getPath resolved)
-                           (.getQuery resolved)
-                           nil)]
-      (str normalized))
-    (catch Exception _
-      nil)))
-
-(defn- topic-id
-  [url]
-  (second (re-find #"/topic/([^/?#]+)" (or url ""))))
-
-(defn- portal-id
-  [url]
-  (second (re-find #"/portal/([^/?#]+)" (or url ""))))
-
-(defn- article-id
-  [url]
-  (or (second (re-find #"/article/([^/?#]+)" (or url "")))
-      (second (re-find #"/plugins/servlet/servicedesk/customer/confluence/shim/spaces/[^/]+/pages/([^/?#]+)"
-                       (or url "")))
-      (second (re-find #"/wiki/spaces/[^/]+/pages/([^/?#]+)"
-                       (or url "")))))
+      (keep url/origin (source-urls source-cfg))))
 
 (defn- contextualize-article-url
   [context-url url]
-  (let [topic-id (topic-id context-url)
-        portal-id (portal-id context-url)
-        article-id (article-id url)]
+  (let [topic-id (url/path-id "topic" context-url)
+        portal-id (url/path-id "portal" context-url)
+        article-id (url/article-id url)]
     (cond
       (and topic-id
            portal-id
            article-id
            (string? url)
            (not (str/includes? url "/topic/")))
-      (str (url-origin context-url)
+      (str (url/origin context-url)
            "/servicedesk/customer/portal/" portal-id
            "/topic/" topic-id
            "/article/" article-id)
@@ -313,7 +261,7 @@
            (string? url)
            (or (str/includes? url "/plugins/servlet/servicedesk/customer/confluence/shim/")
                (str/includes? url "/wiki/spaces/")))
-      (str (url-origin context-url)
+      (str (url/origin context-url)
            "/servicedesk/customer/portal/" portal-id
            "/article/" article-id)
 
@@ -322,13 +270,13 @@
 
 (defn- direct-article-url
   [url]
-  (let [portal-id (portal-id url)
-        article-id (article-id url)]
+  (let [portal-id (url/path-id "portal" url)
+        article-id (url/article-id url)]
     (when (and portal-id
                article-id
                (string? url)
                (str/includes? url "/topic/"))
-      (str (url-origin url)
+      (str (url/origin url)
            "/servicedesk/customer/portal/" portal-id
            "/article/" article-id))))
 
@@ -340,14 +288,19 @@
 
 (defn- url-allowed?
   [source-cfg url]
-  (let [allowed-prefixes (seq (allowed-url-prefixes source-cfg))
-        denied-urls (set (:denied_urls source-cfg))
-        denied-prefixes (:denied_url_prefixes source-cfg)]
-    (and (seq url)
-         (or (not (seq allowed-prefixes))
-             (some #(str/starts-with? url %) allowed-prefixes))
-         (not (contains? denied-urls url))
-         (not-any? #(str/starts-with? url %) denied-prefixes))))
+  (url/allowed? (url/source-allow-config source-cfg (seq (allowed-url-prefixes source-cfg)))
+                url))
+
+(defn- navigable?
+  "SSRF guard for URLs sourced from untrusted rendered content (iframe src,
+   jsonPayload fallback). The host must be one of the source's trusted hosts —
+   the start-URL hosts plus any configured internal_link_hosts. This permits
+   same-host navigation (e.g. the Confluence iframe) while blocking redirection
+   to internal/metadata endpoints."
+  [source-cfg url]
+  (boolean
+   (when-let [h (url/host url)]
+     (contains? (set (internal-link-hosts source-cfg)) h))))
 
 (defn- driver-options
   [source-cfg]
@@ -645,7 +598,10 @@
     (if had-iframe?
       (if-let [iframe (render-first-iframe driver source-cfg (:title shell) (:url shell))]
         (if (blank-html? (:body iframe))
-          (if-let [iframe-url (:iframe_url shell)]
+          ;; The iframe src comes from untrusted rendered content; only navigate
+          ;; to it when it passes the source allow/deny rules (SSRF guard).
+          (if-let [iframe-url (let [u (:iframe_url shell)]
+                                (when (navigable? source-cfg u) u))]
             (if-let [iframe-page (render-url-content driver source-cfg iframe-url)]
               (if (blank-html? (:body iframe-page))
                 (render-current-frame driver source-cfg)
@@ -667,7 +623,10 @@
   (e/set-page-load-timeout driver (or (:page_load_timeout_seconds source-cfg)
                                       default-page-load-timeout-seconds))
   (let [initial (go-and-render driver source-cfg url)
-        fallback-url (:fallback_url initial)
+        ;; fallback_url is read from the page's #jsonPayload (untrusted); only
+        ;; follow it when it passes the source allow/deny rules (SSRF guard).
+        fallback-url (let [u (:fallback_url initial)]
+                       (when (navigable? source-cfg u) u))
         rendered (if (and fallback-url
                           (article-url? url)
                           (blank-html? (:body initial)))
@@ -676,11 +635,11 @@
                           :fallback_url fallback-url)
                    initial)
         canonical-url (or (some-> (stabilized-url driver url source-cfg)
-                                  (normalize-url url))
+                                  (url/normalize url))
                           url)
         result-url (or (:url rendered) canonical-url)
-        canonical-url (or (normalize-url canonical-url result-url) canonical-url)
-        external-id (article-id canonical-url)
+        canonical-url (or (url/normalize canonical-url result-url) canonical-url)
+        external-id (url/article-id canonical-url)
         hrefs (:hrefs rendered)
         title (:title rendered)
         html (:body rendered)]
@@ -693,7 +652,7 @@
      :body html
      :fallback_url (:fallback_url rendered)
      :hrefs (->> hrefs
-                 (keep #(normalize-url canonical-url %))
+                 (keep #(url/normalize canonical-url %))
                  (map #(contextualize-article-url canonical-url %))
                  (mapcat expand-article-url-variants)
                  distinct

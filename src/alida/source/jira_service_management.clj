@@ -1,15 +1,19 @@
 (ns alida.source.jira-service-management
   (:require [alida.source :as source]
             [alida.source.webdriver :as webdriver]
+            [alida.url :as url]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [com.climate.claypoole :as cp])
-  (:import [java.net URI]
-           [org.jsoup Jsoup]))
+  (:import [org.jsoup Jsoup]))
 
 (def default-max-pages 1000)
 (def default-max-concurrency 20)
 (def default-category-page-limit 100)
+
+;; The article view endpoint negotiates representation on Accept: without it the
+;; gateway returns text/plain (rejected by extraction). Request HTML explicitly.
+(def article-accept-header "text/html")
 
 (defn- source-urls
   [source-cfg]
@@ -31,58 +35,10 @@
   [source-cfg]
   (keyword (or (:crawl_method source-cfg) "api")))
 
-(defn- url-origin
-  [url]
-  (try
-    (let [uri (URI. url)
-          scheme (.getScheme uri)
-          host (.getHost uri)
-          port (.getPort uri)]
-      (when (and scheme host)
-        (str scheme "://" host (when (not= -1 port) (str ":" port)))))
-    (catch Exception _
-      nil)))
-
-(defn- normalize-url
-  [base-url href]
-  (try
-    (let [base (URI. base-url)
-          resolved (.normalize (.resolve base href))
-          normalized (URI. (.getScheme resolved)
-                           (.getUserInfo resolved)
-                           (.getHost resolved)
-                           (.getPort resolved)
-                           (.getPath resolved)
-                           (.getQuery resolved)
-                           nil)]
-      (str normalized))
-    (catch Exception _
-      nil)))
-
-(defn- portal-id
-  [url]
-  (second (re-find #"/portal/([^/?#]+)" (or url ""))))
-
-(defn- topic-id
-  [url]
-  (second (re-find #"/topic/([^/?#]+)" (or url ""))))
-
-(defn- article-id
-  [url]
-  (or (second (re-find #"/article/([^/?#]+)" (or url "")))
-      (second (re-find #"/kb/view/([^/?#]+)" (or url "")))
-      (second (re-find #"/pages/([^/?#]+)" (or url "")))))
-
 (defn- allowed-url?
   [source-cfg url]
-  (let [allowed-prefixes (seq (:allowed_url_prefixes source-cfg))
-        denied-urls (set (:denied_urls source-cfg))
-        denied-prefixes (:denied_url_prefixes source-cfg)]
-    (and (seq url)
-         (or (not allowed-prefixes)
-             (some #(str/starts-with? url %) allowed-prefixes))
-         (not (contains? denied-urls url))
-         (not-any? #(str/starts-with? url %) denied-prefixes))))
+  (url/allowed? (url/source-allow-config source-cfg (seq (:allowed_url_prefixes source-cfg)))
+                url))
 
 (defn- request-success
   [sys request context]
@@ -115,8 +71,8 @@
 (defn- category-id
   [category]
   (or (:id category)
-      (topic-id (:categoryUrl category))
-      (topic-id (:url category))))
+      (url/path-id "topic" (:categoryUrl category))
+      (url/path-id "topic" (:url category))))
 
 (defn- categories
   [payload]
@@ -135,12 +91,24 @@
                       {:type :alida.source.jira-service-management/missing-json-payload
                        :source-id (:id source-cfg)
                        :url start-url})))
-    {:origin (url-origin start-url)
-     :portal-id (or (portal-id start-url)
-                    (some-> (get-in payload [:portal :id]) str))
-     :workspace-id (workspace-id (:body response) payload)
-     :project-id (some-> (project-id payload) str)
-     :categories (categories payload)}))
+    (let [ctx {:origin (url/origin start-url)
+               :portal-id (or (url/path-id "portal" start-url)
+                              (some-> (get-in payload [:portal :id]) str))
+               :workspace-id (workspace-id (:body response) payload)
+               :project-id (some-> (project-id payload) str)
+               :categories (categories payload)}]
+      ;; A start URL pointing at the portals home (or any page without a portal
+      ;; payload) yields no categories and would otherwise discover 0 articles
+      ;; silently. Fail loudly with the likely fix rather than index nothing.
+      (when (and (empty? (:categories ctx))
+                 (not (url/article-id start-url)))
+        (throw (ex-info (str "Jira Service Management start URL exposed no knowledge-base "
+                             "categories. Point the source at a specific portal, e.g. "
+                             (:origin ctx) "/servicedesk/customer/portal/<id>")
+                        {:type :alida.source.jira-service-management/no-categories
+                         :source-id (:id source-cfg)
+                         :url start-url})))
+      ctx)))
 
 (defn- article-url
   [{:keys [origin portal-id]} article-id]
@@ -164,13 +132,23 @@
        "/article?expand=category&limit=" limit
        "&orderBy=%2Bfeatured&start=" start))
 
+(defn- portal-view-url
+  "A viewUrl is usable as a canonical URL only when it is a portal-shaped page
+   URL. The live gateway returns a /rest/... endpoint here, which must not become
+   the canonical URL (it produces mixed URL shapes across discovery and fails the
+   portal-shaped allow-prefix filter), so fall back to the portal article URL."
+  [ctx view-url]
+  (some->> view-url
+           (url/normalize (:origin ctx))
+           (#(when (str/includes? % "/servicedesk/customer/portal/") %))))
+
 (defn- article-ref
   [ctx result]
   (let [id (some-> (:id result) str)]
     (when (seq id)
       {:article_id id
        :title (:title result)
-       :canonical_url (or (some->> (:viewUrl result) (normalize-url (:origin ctx)))
+       :canonical_url (or (portal-view-url ctx (:viewUrl result))
                           (article-url ctx id))})))
 
 (defn- last-category-page?
@@ -223,8 +201,8 @@
   [sys source-cfg ctx start-url remaining]
   (let [category-refs (mapcat #(category-article-refs sys source-cfg ctx % remaining)
                               (:categories ctx))
-        start-refs (keep (fn [url]
-                           (when-let [id (article-id url)]
+        start-refs (keep (fn [u]
+                           (when-let [id (url/article-id u)]
                              {:article_id id
                               :canonical_url (article-url ctx id)}))
                          [start-url])]
@@ -233,25 +211,20 @@
          distinct
          vec)))
 
-(defn- response-location
-  [response]
-  (or (get-in response [:headers "Location"])
-      (get-in response [:headers "location"])))
-
 (defn- resolve-shim-link
   [sys _source-cfg url]
   (try
     (let [response (source/request! sys {:method :get
                                          :url url
                                          :redirect-policy :never})
-          location (response-location response)]
-      (some->> location (normalize-url url) article-id))
+          location (source/header response "Location")]
+      (some->> location (alida.url/normalize url) alida.url/article-id))
     (catch Exception _
       nil)))
 
 (defn- href-article-id
   [sys source-cfg href]
-  (or (article-id href)
+  (or (url/article-id href)
       (when (str/includes? href "/plugins/servlet/servicedesk/customer/confluence/shim/x/")
         (resolve-shim-link sys source-cfg href))))
 
@@ -276,55 +249,48 @@
   (let [id (:article_id ref)
         url (article-api-url ctx id)
         canonical-url (or (:canonical_url ref) (article-url ctx id))
-        response (source/request! sys {:method :get :url url})]
+        response (source/request! sys {:method :get :url url
+                                       :headers {"Accept" article-accept-header}})]
     (if (source/successful-status? (:status response))
       {:source_id (:id source-cfg)
        :source_type (:type source-cfg)
        :external_id id
        :canonical_url canonical-url
-       :content_type (or (get-in response [:headers "Content-Type"])
-                         (get-in response [:headers "content-type"])
-                         "text/html")
+       :content_type (or (source/header response "Content-Type") "text/html")
        :title (article-title (:title ref) (:body response))
        :body (:body response)
        :hrefs (mapv #(article-url ctx %)
                     (article-links sys source-cfg canonical-url (:body response)))}
-      (source/anomaly (case (:status response)
-                        404 :cognitect.anomalies/not-found
-                        :cognitect.anomalies/fault)
-                      (merge {:type :alida.source.jira-service-management/article-fetch-failed
-                              :source-id (:id source-cfg)
-                              :canonical-url canonical-url
-                              :article-id id
-                              :status (:status response)}
-                             (source/error-response-details response))))))
+      (source/fetch-anomaly response
+                            {:type :alida.source.jira-service-management/article-fetch-failed
+                             :source-id (:id source-cfg)
+                             :canonical-url canonical-url
+                             :article-id id}))))
 
 (defn- enqueue-refs
   [source-cfg ctx queued refs page]
   (reduce (fn [[queue queued] href]
-            (if (and (allowed-url? source-cfg href)
-                     (article-id href))
-              (let [id (article-id href)]
-                (if (contains? queued id)
-                  [queue queued]
-                  [(conj queue {:article_id id
-                                :canonical_url (article-url ctx id)})
-                   (conj queued id)]))
+            (if-let [id (and (allowed-url? source-cfg href)
+                             (url/article-id href))]
+              (if (contains? queued id)
+                [queue queued]
+                [(conj queue {:article_id id
+                              :canonical_url (article-url ctx id)})
+                 (conj queued id)])
               [queue queued]))
           [refs queued]
           (:hrefs page)))
 
 (defn- fetch-batch
-  [sys source-cfg ctx refs]
-  (let [concurrency (max 1 (max-concurrency source-cfg))]
-    (if (= 1 concurrency)
-      (mapv #(fetch-article sys source-cfg ctx %) refs)
-      (cp/with-shutdown! [pool (cp/threadpool concurrency :name "alida-jsm-api")]
-        (vec (doall
-              (cp/upmap pool #(fetch-article sys source-cfg ctx %) refs)))))))
+  [pool sys source-cfg ctx refs]
+  (if pool
+    (vec (cp/upmap pool #(fetch-article sys source-cfg ctx %) refs))
+    (mapv #(fetch-article sys source-cfg ctx %) refs)))
 
 (defn- discover-api-start
-  [sys source-cfg start-url remaining-pages]
+  "BFS the portal's article graph. The thread pool (when concurrency > 1) is
+   created once for the whole traversal rather than per batch."
+  [pool sys source-cfg start-url remaining-pages]
   (let [ctx (portal-context sys source-cfg start-url)
         seeds (seed-article-refs sys source-cfg ctx start-url remaining-pages)]
     (loop [queue (into clojure.lang.PersistentQueue/EMPTY seeds)
@@ -337,7 +303,7 @@
               batch-size (min remaining (max 1 (max-concurrency source-cfg)) (count queue))
               batch (vec (take batch-size queue))
               queue (into clojure.lang.PersistentQueue/EMPTY (drop batch-size queue))
-              fetched (fetch-batch sys source-cfg ctx batch)
+              fetched (fetch-batch pool sys source-cfg ctx batch)
               pages (into pages fetched)
               [queue queued] (reduce (fn [[queue queued] page]
                                        (if (source/anomaly? page)
@@ -347,8 +313,8 @@
                                      fetched)]
           (recur queue queued pages))))))
 
-(defn- discover-api
-  [sys source-cfg]
+(defn- discover-api*
+  [pool sys source-cfg]
   (let [starts (source-urls source-cfg)]
     (when-not (seq starts)
       (throw (ex-info "Jira Service Management source requires url, start_url, or start_urls"
@@ -361,7 +327,15 @@
         pages
         (let [remaining (- (max-pages source-cfg) (count pages))]
           (recur (rest starts)
-                 (into pages (discover-api-start sys source-cfg (first starts) remaining))))))))
+                 (into pages (discover-api-start pool sys source-cfg (first starts) remaining))))))))
+
+(defn- discover-api
+  [sys source-cfg]
+  (let [concurrency (max 1 (max-concurrency source-cfg))]
+    (if (> concurrency 1)
+      (cp/with-shutdown! [pool (cp/threadpool concurrency :name "alida-jsm-api")]
+        (discover-api* pool sys source-cfg))
+      (discover-api* nil sys source-cfg))))
 
 (defmethod source/discover :jira-service-management
   [sys source-cfg]

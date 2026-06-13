@@ -1,5 +1,6 @@
 (ns alida.source.website
   (:require [alida.source :as source]
+            [alida.url :as url]
             [clojure.string :as str])
   (:import [org.jsoup Jsoup]
            [org.jsoup.parser Parser]))
@@ -19,13 +20,8 @@
 
 (defn- url-allowed?
   [source-cfg url]
-  (let [allowed-prefixes (:allowed_url_prefixes source-cfg)
-        denied-urls (set (:denied_urls source-cfg))
-        denied-prefixes (:denied_url_prefixes source-cfg)]
-    (and (or (not (seq allowed-prefixes))
-             (some #(str/starts-with? url %) allowed-prefixes))
-         (not (contains? denied-urls url))
-         (not-any? #(str/starts-with? url %) denied-prefixes))))
+  (url/allowed? (url/source-allow-config source-cfg (:allowed_url_prefixes source-cfg))
+                url))
 
 (defn- sitemap-location-elements
   [document kind]
@@ -79,9 +75,12 @@
            {:keys [kind locations]} (parse-sitemap (:body response))]
        (case kind
          :sitemapindex
-         (mapv identity
-               (mapcat #(discover-sitemap sys source-cfg (conj visited sitemap-url) (inc depth) %)
-                       locations))
+         ;; Only recurse into child sitemaps on the same origin as their parent.
+         ;; A crawled sitemap-index is untrusted input; without this an attacker
+         ;; could list an internal/metadata URL as a child sitemap (SSRF).
+         (let [parent-origin (url/origin sitemap-url)]
+           (vec (mapcat #(discover-sitemap sys source-cfg (conj visited sitemap-url) (inc depth) %)
+                        (filter #(= parent-origin (url/origin %)) locations))))
 
          :urlset
          (->> locations
@@ -95,7 +94,7 @@
       (throw (ex-info "Website source requires sitemap_url or sitemap_urls"
                       {:type :alida.source.website/missing-sitemap
                        :source-id (:id source-cfg)})))
-    (mapv identity (mapcat #(discover-sitemap sys source-cfg %) sitemaps))))
+    (vec (mapcat #(discover-sitemap sys source-cfg %) sitemaps))))
 
 (defmethod source/fetch :website
   [sys source-cfg discovered-item]
@@ -104,15 +103,10 @@
     (if (source/successful-status? (:status response))
       (assoc discovered-item
              :body (:body response)
-             :content_type (or (get-in response [:headers "Content-Type"])
-                               (get-in response [:headers "content-type"])
+             :content_type (or (source/header response "Content-Type")
                                (:content_type discovered-item)
                                "text/html"))
-      (source/anomaly (case (:status response)
-                        404 :cognitect.anomalies/not-found
-                        :cognitect.anomalies/fault)
-                      (merge {:type :alida.source.website/fetch-failed
-                              :source-id (:id source-cfg)
-                              :canonical-url (:canonical_url discovered-item)
-                              :status (:status response)}
-                             (source/error-response-details response))))))
+      (source/fetch-anomaly response
+                            {:type :alida.source.website/fetch-failed
+                             :source-id (:id source-cfg)
+                             :canonical-url (:canonical_url discovered-item)}))))

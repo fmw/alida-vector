@@ -2,6 +2,7 @@
   (:require [alida.source :as source]
             [alida.source.jira-service-management]
             [alida.source.webdriver :as webdriver]
+            [alida.test-helpers :refer [fake-http]]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]))
@@ -64,14 +65,6 @@
                               :title "Article Two"
                               :viewUrl "/servicedesk/customer/portal/1/topic/topic-a/article/1002"}]}))
 
-(defn- fake-http
-  [responses requests]
-  {:alida/http-request (fn [request]
-                         (swap! requests conj request)
-                         (or (get responses (:url request))
-                             {:status 500
-                              :body (str "missing fake response for " (:url request))}))})
-
 (def source-cfg
   {:id "support"
    :type "jira-service-management"
@@ -109,6 +102,44 @@
     (is (every? #(= "jira-service-management" (:source_type %)) items))
     (is (some #(str/includes? (:body %) "Article Three") items))
     (is (= 5 (count @requests)))))
+
+(defn- rest-view-category-response
+  "Mirror the live gateway, which returns a /rest/... viewUrl rather than a
+   portal page URL."
+  []
+  (json/write-str {:results [{:id "1001"
+                              :title "Article One"
+                              :viewUrl "/rest/servicedesk/knowledgebase/latest/articles/view/1001"}]}))
+
+(deftest api-normalizes-rest-view-urls-to-portal-form
+  (let [sys (fake-http {"https://example.atlassian.net/servicedesk/customer/portal/1"
+                        {:status 200 :body (portal-page)}
+                        (category-url)
+                        {:status 200 :body (rest-view-category-response)}
+                        "https://example.atlassian.net/rest/servicedesk/knowledgebase/latest/articles/view/1001"
+                        {:status 200
+                         :headers {"Content-Type" "text/html"}
+                         :body "<article><h1>Article One</h1><p>Body.</p></article>"}}
+                       (atom []))
+        items (source/discover sys source-cfg)]
+    (is (= ["https://example.atlassian.net/servicedesk/customer/portal/1/article/1001"]
+           (mapv :canonical_url items))
+        "a /rest/ viewUrl must not leak into the canonical URL")))
+
+(deftest api-fails-loudly-when-start-url-exposes-no-categories
+  (let [portals-page (str "<html><body>"
+                          "<script>window.api = '/gateway/api/jsd-apollo-stargate/sharded/workspace/"
+                          workspace-id "/api/project/42';</script>"
+                          "<div id=\"jsonPayload\">"
+                          (json/write-str {:portal {:id 1 :projectId 42}})
+                          "</div></body></html>")
+        sys (fake-http {"https://example.atlassian.net/servicedesk/customer/portals"
+                        {:status 200 :body portals-page}}
+                       (atom []))
+        cfg (assoc source-cfg :url "https://example.atlassian.net/servicedesk/customer/portals")
+        thrown (try (source/discover sys cfg) nil
+                    (catch clojure.lang.ExceptionInfo e (ex-data e)))]
+    (is (= :alida.source.jira-service-management/no-categories (:type thrown)))))
 
 (deftest fetch-returns-api-discovered-body
   (let [item {:source_id "support"
