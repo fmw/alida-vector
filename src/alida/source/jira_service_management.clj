@@ -4,7 +4,8 @@
             [alida.url :as url]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [com.climate.claypoole :as cp])
+            [com.climate.claypoole :as cp]
+            [etaoin.api :as e])
   (:import [org.jsoup Jsoup]))
 
 (def default-max-pages 1000)
@@ -337,6 +338,225 @@
       (cp/with-shutdown! [pool (cp/threadpool concurrency :name "alida-jsm-api")]
         (discover-api* pool sys source-cfg))
       (discover-api* nil sys source-cfg))))
+
+;; ----------------------------------------------------------------------------
+;; Rendered (WebDriver) crawl: the jira-service-management render profile.
+;;
+;; All JSM/Atlassian/Confluence knowledge the generic browser engine needs lives
+;; here, exposed through the engine's `webdriver/render-profile` extension point.
+;; ----------------------------------------------------------------------------
+
+(def ^:private render-content-wait-selectors
+  ["a[href*='/article/']"
+   "a[href*='/topic/']"
+   "#main-content"
+   "main article"
+   "article"
+   "[data-testid*='article']"
+   "[class*='article']"])
+
+(def ^:private render-remove-selectors
+  ;; Atlassian/JSM page chrome, stripped on top of the engine's universal
+  ;; script/style removal.
+  ["meta[name^=ajs-]"
+   "#jsonPayload"
+   "#envJson"
+   "footer"
+   "[role=dialog]"
+   "[data-skip-link-wrapper=true]"
+   "[data-testid=outer-BannerContainer]"])
+
+(def ^:private default-iframe-related-links-timeout-ms 5000)
+(def ^:private default-iframe-related-links-stable-count 3)
+(def ^:private default-render-wait-interval-ms 100)
+
+(defn- render-article-url?
+  [url]
+  (and (string? url)
+       (str/includes? url "/article/")))
+
+(defn- render-topic-url?
+  [url]
+  (and (string? url)
+       (str/includes? url "/topic/")
+       (not (str/includes? url "/article/"))))
+
+(defn- render-portals-url?
+  [url]
+  (and (string? url)
+       (str/ends-with? url "/portals")))
+
+(defn- render-direct-service-desk-article-url?
+  [url]
+  (and (render-article-url? url)
+       (not (str/includes? url "/topic/"))))
+
+(defn- render-wait-selectors
+  "URL-aware readiness selectors: portals list -> topic links, topic page ->
+   article links, article page -> the Confluence iframe. Returns nil for other
+   URLs so the engine falls back to the configured content-wait selectors."
+  [_source-cfg url]
+  (cond
+    (render-article-url? url) ["iframe"]
+    (render-topic-url? url) ["a[href*='/article/']"]
+    (render-portals-url? url) ["a[href*='/topic/']"]
+    :else nil))
+
+(defn- contextualize-article-url
+  [context-url url]
+  (let [topic-id (url/path-id "topic" context-url)
+        portal-id (url/path-id "portal" context-url)
+        article-id (url/article-id url)]
+    (cond
+      (and topic-id
+           portal-id
+           article-id
+           (string? url)
+           (not (str/includes? url "/topic/")))
+      (str (url/origin context-url)
+           "/servicedesk/customer/portal/" portal-id
+           "/topic/" topic-id
+           "/article/" article-id)
+
+      (and topic-id
+           (string? url)
+           (str/includes? url "/article/")
+           (not (str/includes? url "/topic/")))
+      (str/replace-first url
+                         #"/portal/([^/]+)/article/([^/?#]+)"
+                         (str "/portal/$1/topic/" topic-id "/article/$2"))
+
+      (and portal-id
+           article-id
+           (string? url)
+           (or (str/includes? url "/plugins/servlet/servicedesk/customer/confluence/shim/")
+               (str/includes? url "/wiki/spaces/")))
+      (str (url/origin context-url)
+           "/servicedesk/customer/portal/" portal-id
+           "/article/" article-id)
+
+      :else
+      url)))
+
+(defn- direct-article-url
+  [url]
+  (let [portal-id (url/path-id "portal" url)
+        article-id (url/article-id url)]
+    (when (and portal-id
+               article-id
+               (string? url)
+               (str/includes? url "/topic/"))
+      (str (url/origin url)
+           "/servicedesk/customer/portal/" portal-id
+           "/article/" article-id))))
+
+(defn- expand-article-url-variants
+  [url]
+  (if-let [direct-url (direct-article-url url)]
+    [url direct-url]
+    [url]))
+
+(defn- render-transform-hrefs
+  [context-url hrefs]
+  (->> hrefs
+       (map #(contextualize-article-url context-url %))
+       (mapcat expand-article-url-variants)))
+
+(def ^:private render-extras-js
+  ;; Read JSM's in-page #jsonPayload for the category description (prepended to
+  ;; the page content by the engine) and the knowledge-base fallback URL (used
+  ;; when an article renders blank).
+  "const payload = () => {
+     try {
+       const payloadText = document.querySelector('#jsonPayload')?.textContent;
+       if (!payloadText) return null;
+       return JSON.parse(payloadText);
+     } catch (e) {
+       return null;
+     }
+   };
+   const canonical = href => {
+     try {
+       const url = new URL(href, window.location.href);
+       url.hash = '';
+       return url.toString();
+     } catch (e) {
+       return null;
+     }
+   };
+   const payloadJson = payload();
+   const categoryDescription = () => {
+     try {
+       const categories = payloadJson?.portal?.categories?.categories || [];
+       const current = canonical(window.location.href);
+       const category = categories.find(c => canonical(c.categoryUrl) === current);
+       return category?.description || null;
+     } catch (e) {
+       return null;
+     }
+   };
+   return {
+     description: categoryDescription(),
+     fallbackUrl: payloadJson?.portal?.kbPage?.url || null
+   };")
+
+(defn- render-blank-html?
+  [html]
+  (str/blank? (.text (Jsoup/parse (or html "")))))
+
+(defn- render-blank-fallback-url
+  "When a direct article render comes back blank, JSM exposes a knowledge-base
+   page URL in its jsonPayload to retry against (the engine still SSRF/scope
+   guards it before navigating)."
+  [_source-cfg url page]
+  (when (and (:fallback_url page)
+             (render-article-url? url)
+             (render-blank-html? (:body page)))
+    (:fallback_url page)))
+
+(defn- frame-related-links-count
+  [driver]
+  (long (or (e/js-execute driver
+                          "return document.querySelectorAll(\"a[href*='/plugins/servlet/servicedesk/customer/confluence/shim/spaces/']\").length;")
+            0)))
+
+(defn- wait-for-related-links!
+  "Related shim links render shortly after an article frame's body. Articles with
+   zero or one of them would otherwise wait out the full timeout, so stop early
+   once the count exceeds the article's own link or has stopped changing for a
+   few consecutive samples."
+  [driver source-cfg]
+  (let [timeout-ms (or (:iframe_related_links_timeout_ms source-cfg)
+                       default-iframe-related-links-timeout-ms)
+        interval-ms (or (:wait_interval_ms source-cfg)
+                        default-render-wait-interval-ms)
+        deadline-ns (+ (System/nanoTime) (* timeout-ms 1000000))]
+    (loop [previous-count -1
+           stable-count 0]
+      (let [related-count (frame-related-links-count driver)
+            stable-count (if (= related-count previous-count)
+                           (inc stable-count)
+                           0)]
+        (when-not (or (> related-count 1)
+                      (>= stable-count default-iframe-related-links-stable-count)
+                      (>= (System/nanoTime) deadline-ns))
+          (e/wait (/ interval-ms 1000.0))
+          (recur related-count stable-count))))))
+
+(defn- render-await-extra-frame-content!
+  [driver source-cfg outer-url]
+  (when (render-direct-service-desk-article-url? outer-url)
+    (wait-for-related-links! driver source-cfg)))
+
+(defmethod webdriver/render-profile "jira-service-management"
+  [_]
+  {:content-wait-selectors render-content-wait-selectors
+   :remove-selectors render-remove-selectors
+   :wait-selectors render-wait-selectors
+   :transform-hrefs render-transform-hrefs
+   :extras-js render-extras-js
+   :blank-fallback-url render-blank-fallback-url
+   :await-extra-frame-content! render-await-extra-frame-content!})
 
 (defn- webdriver-source-cfg
   "Delegate config for the rendered crawl. Defaults to multiple parallel
