@@ -1,4 +1,11 @@
 (ns alida.source.webdriver
+  "Generic headless-browser crawl engine. The discovery queue, parallel browser
+   workers, restart/retry policy, readiness waits, iframe extraction, and
+   allow/deny + SSRF scoping are all site-agnostic. Site-specific behavior (which
+   selectors to await, how to rewrite/expand discovered links, in-page metadata
+   extraction, extra frame waits) is supplied by a render profile resolved from
+   the source's `:render_profile`. The `:default` profile is fully generic; see
+   e.g. `alida.source.jira-service-management` for a site-specific profile."
   (:require [alida.source :as source]
             [alida.url :as url]
             [clojure.string :as str]
@@ -14,22 +21,11 @@
 (def default-url-stabilization-ms 100)
 (def default-url-stabilization-attempts 20)
 (def default-url-stabilization-stable-count 2)
-(def default-iframe-related-links-timeout-ms 5000)
-(def default-iframe-related-links-stable-count 3)
 (def default-browser-restart-after-pages 50)
 (def default-browser-restart-after-failures 2)
 (def default-render-failure-retries 2)
 (def default-progress-log-every-pages 25)
 (def default-max-concurrency 1)
-
-(def default-content-wait-selectors
-  ["a[href*='/article/']"
-   "a[href*='/topic/']"
-   "#main-content"
-   "main article"
-   "article"
-   "[data-testid*='article']"
-   "[class*='article']"])
 
 (def default-browser-args
   ;; --headless=new plus a regular browser user-agent: the default
@@ -73,14 +69,19 @@
   (str "--disk-cache-dir=/tmp/alida-vector/chrome-cache-" (.incrementAndGet driver-counter)))
 
 (def cleanup-script
-  ;; The live DOM is read but never mutated: link replacement, selector removal,
-  ;; and description prepending all happen on a detached clone of the content
-  ;; element. Mutating the live page while the portal SPA is still hydrating
-  ;; throws its scripts into a busy loop that wedges the renderer (every later
-  ;; WebDriver call then fails with "timed out receiving message from renderer").
+  ;; Generic, site-agnostic cleanup. The live DOM is read but never mutated:
+  ;; link replacement, selector removal, and description prepending all happen on
+  ;; a detached clone of the content element. Mutating the live page while a SPA
+  ;; is still hydrating throws its scripts into a busy loop that wedges the
+  ;; renderer (every later WebDriver call then fails with "timed out receiving
+  ;; message from renderer"). arguments: [removeSelectors internalHosts
+  ;; preserveExternalLinks description]; description (optional) is prepended to
+  ;; the content when present, letting a render profile inject site-specific
+  ;; metadata without this script knowing where it came from.
   "const removeSelectors = arguments[0] || [];
    const internalHosts = new Set((arguments[1] || []).map(host => String(host).toLowerCase()));
    const preserveExternalLinks = arguments[2] !== false;
+   const description = arguments[3] || null;
 
    const linkHost = href => {
      try {
@@ -89,36 +90,6 @@
        return null;
      }
    };
-   const canonical = href => {
-     try {
-       const url = new URL(href, window.location.href);
-       url.hash = '';
-       return url.toString();
-     } catch (e) {
-       return null;
-     }
-   };
-   const payload = () => {
-     try {
-       const payloadText = document.querySelector('#jsonPayload')?.textContent;
-       if (!payloadText) return null;
-       return JSON.parse(payloadText);
-     } catch (e) {
-       return null;
-     }
-   };
-   const payloadJson = payload();
-   const categoryDescription = () => {
-     try {
-       const categories = payloadJson?.portal?.categories?.categories || [];
-       const current = canonical(window.location.href);
-       const category = categories.find(c => canonical(c.categoryUrl) === current);
-       return category?.description || null;
-     } catch (e) {
-       return null;
-     }
-   };
-   const knowledgeBaseFallbackUrl = () => payloadJson?.portal?.kbPage?.url || null;
 
    const contentSelector = '#main-content, #content, #main, .content, main, article, body';
    const hrefs = new Set();
@@ -165,7 +136,6 @@
      }
    }
 
-   const description = categoryDescription();
    if (clone && description && !(clone.textContent || '').includes(description)) {
      const p = document.createElement('p');
      p.textContent = description;
@@ -176,9 +146,61 @@
      url: window.location.href,
      title: document.title || '',
      html: clone ? clone.outerHTML : document.documentElement.outerHTML,
-     hrefs: Array.from(hrefs),
-     fallbackUrl: knowledgeBaseFallbackUrl()
+     hrefs: Array.from(hrefs)
    };")
+
+;; ----------------------------------------------------------------------------
+;; Render profiles
+;;
+;; A render profile adapts this generic engine to a site family. It is a map of
+;; data + fn hooks, resolved from the source's `:render_profile` (a string;
+;; nil/unknown -> the generic `:default` profile). Keys:
+;;
+;;   :content-wait-selectors   default selectors awaited when the source config
+;;                             does not set `content_wait_selectors`.
+;;   :remove-selectors         extra CSS selectors stripped from every page (on
+;;                             top of the engine's universal "script"/"style"
+;;                             and the source's configured `remove_selectors`).
+;;   :wait-selectors           (fn [source-cfg url]) -> selectors | nil. URL-aware
+;;                             readiness selectors; nil falls back to
+;;                             content-wait-selectors.
+;;   :transform-hrefs          (fn [canonical-url hrefs]) -> hrefs. Rewrite/expand
+;;                             discovered links (default: identity).
+;;   :extras-js                JS string returning {description, fallbackUrl} or
+;;                             nil. `description` is prepended to page content;
+;;                             `fallbackUrl` is a blank-page navigation fallback.
+;;   :blank-fallback-url       (fn [source-cfg url page]) -> url | nil. URL to
+;;                             re-render when the first render of `url` is blank
+;;                             (still subject to the engine's SSRF/scope guard).
+;;   :await-extra-frame-content! (fn [driver source-cfg outer-url]) -> any. Extra
+;;                             waiting after switching into an iframe, on top of
+;;                             the generic frame-content-ready wait.
+;; ----------------------------------------------------------------------------
+
+(defmulti render-profile
+  "Resolve a render profile from a `:render_profile` value (see the profile
+   contract above). The `:default` method is the fully generic profile."
+  identity)
+
+(def generic-profile
+  ;; No default content-wait selectors: a generic site's structure is unknown,
+  ;; so the engine waits for the body to actually contain text (see
+  ;; wait-for-page!) rather than guessing at selectors — and crucially never
+  ;; treats the always-present <body> as a readiness signal. A source that needs
+  ;; to await a specific element sets `content_wait_selectors`.
+  {:content-wait-selectors nil
+   :remove-selectors []
+   :wait-selectors (fn [_source-cfg _url] nil)
+   :transform-hrefs (fn [_canonical-url hrefs] hrefs)
+   :extras-js nil
+   :blank-fallback-url (fn [_source-cfg _url _page] nil)
+   :await-extra-frame-content! (fn [_driver _source-cfg _outer-url] nil)})
+
+(defmethod render-profile :default [_] generic-profile)
+
+(defn- profile
+  [source-cfg]
+  (render-profile (:render_profile source-cfg)))
 
 (defn- source-urls
   [source-cfg]
@@ -209,19 +231,12 @@
 (defn- content-wait-selectors
   [source-cfg]
   (or (seq (:content_wait_selectors source-cfg))
-      default-content-wait-selectors))
+      (:content-wait-selectors (profile source-cfg))))
 
 (defn- remove-selectors
   [source-cfg]
-  (vec (concat ["meta[name^=ajs-]"
-                "script"
-                "style"
-                "#jsonPayload"
-                "#envJson"
-                "footer"
-                "[role=dialog]"
-                "[data-skip-link-wrapper=true]"
-                "[data-testid=outer-BannerContainer]"]
+  (vec (concat ["script" "style"]
+               (:remove-selectors (profile source-cfg))
                (:remove_selectors source-cfg))))
 
 (defn- browser-args
@@ -272,60 +287,6 @@
   (or (seq (:allowed_url_prefixes source-cfg))
       (keep url/origin (source-urls source-cfg))))
 
-(defn- contextualize-article-url
-  [context-url url]
-  (let [topic-id (url/path-id "topic" context-url)
-        portal-id (url/path-id "portal" context-url)
-        article-id (url/article-id url)]
-    (cond
-      (and topic-id
-           portal-id
-           article-id
-           (string? url)
-           (not (str/includes? url "/topic/")))
-      (str (url/origin context-url)
-           "/servicedesk/customer/portal/" portal-id
-           "/topic/" topic-id
-           "/article/" article-id)
-
-      (and topic-id
-           (string? url)
-           (str/includes? url "/article/")
-           (not (str/includes? url "/topic/")))
-      (str/replace-first url
-                         #"/portal/([^/]+)/article/([^/?#]+)"
-                         (str "/portal/$1/topic/" topic-id "/article/$2"))
-
-      (and portal-id
-           article-id
-           (string? url)
-           (or (str/includes? url "/plugins/servlet/servicedesk/customer/confluence/shim/")
-               (str/includes? url "/wiki/spaces/")))
-      (str (url/origin context-url)
-           "/servicedesk/customer/portal/" portal-id
-           "/article/" article-id)
-
-      :else
-      url)))
-
-(defn- direct-article-url
-  [url]
-  (let [portal-id (url/path-id "portal" url)
-        article-id (url/article-id url)]
-    (when (and portal-id
-               article-id
-               (string? url)
-               (str/includes? url "/topic/"))
-      (str (url/origin url)
-           "/servicedesk/customer/portal/" portal-id
-           "/article/" article-id))))
-
-(defn- expand-article-url-variants
-  [url]
-  (if-let [direct-url (direct-article-url url)]
-    [url direct-url]
-    [url]))
-
 (defn- url-allowed?
   [source-cfg url]
   (url/allowed? (url/source-allow-config source-cfg (seq (allowed-url-prefixes source-cfg)))
@@ -339,7 +300,7 @@
 
 (defn- navigable?
   "SSRF + scope guard for URLs sourced from untrusted rendered content (iframe
-   src, jsonPayload fallback). Such a URL must clear both checks:
+   src, profile fallback URL). Such a URL must clear both checks:
 
    1. The host is one of the source's trusted hosts (start-URL hosts plus any
       configured internal_link_hosts) — blocks redirection to internal/metadata
@@ -405,28 +366,18 @@
                  "return (arguments[0] || []).some(selector => !!document.querySelector(selector));"
                  (vec selectors))))
 
-(declare article-url?)
-
-(defn- topic-url?
-  [url]
-  (and (string? url)
-       (str/includes? url "/topic/")
-       (not (str/includes? url "/article/"))))
-
-(defn- portals-url?
-  [url]
-  (and (string? url)
-       (str/ends-with? url "/portals")))
+(defn- frame-text-present?
+  [driver]
+  (boolean
+   (e/js-execute driver
+                 "return ((document.body && document.body.innerText) || '').trim().length > 0;")))
 
 (defn- wait-selectors-for-url
+  "Readiness selectors for a URL: the active profile may pick them by URL shape;
+   nil falls back to the source's configured/default content-wait selectors."
   [source-cfg url]
-  (if (= "jira-service-management" (:render_profile source-cfg))
-    (cond
-      (article-url? url) ["iframe"]
-      (topic-url? url) ["a[href*='/article/']"]
-      (portals-url? url) ["a[href*='/topic/']"]
-      :else (content-wait-selectors source-cfg))
-    (content-wait-selectors source-cfg)))
+  (or ((:wait-selectors (profile source-cfg)) source-cfg url)
+      (content-wait-selectors source-cfg)))
 
 (defn- wait-until
   [source-cfg pred]
@@ -444,13 +395,22 @@
     (throw (ex-info "Timed out waiting for page readiness"
                     {:type :alida.source.webdriver/page-ready-timeout
                      :canonical-url url})))
-  (let [current-url (or (e/get-url driver) url)]
-    (when-not (wait-until source-cfg #(any-selector-present? driver (wait-selectors-for-url source-cfg current-url)))
+  (let [current-url (or (e/get-url driver) url)
+        selectors (wait-selectors-for-url source-cfg current-url)
+        ;; With content selectors (configured, or supplied by the profile), wait
+        ;; for one to appear. Without any (the generic profile on an unconfigured
+        ;; source), wait for the body to actually contain text — the always-
+        ;; present <body> is not a readiness signal, so a JS-heavy page would
+        ;; otherwise be captured before it renders.
+        content-ready? (if (seq selectors)
+                         #(any-selector-present? driver selectors)
+                         #(frame-text-present? driver))]
+    (when-not (wait-until source-cfg content-ready?)
       (throw (ex-info "Timed out waiting for page content"
                       {:type :alida.source.webdriver/page-content-timeout
                        :canonical-url url
                        :current-url current-url
-                       :selectors (wait-selectors-for-url source-cfg current-url)})))))
+                       :selectors selectors})))))
 
 (defn- blank-html?
   [html]
@@ -460,12 +420,6 @@
   [driver]
   (pos? (long (or (e/js-execute driver "return document.querySelectorAll('iframe').length;")
                   0))))
-
-(defn- frame-text-present?
-  [driver]
-  (boolean
-   (e/js-execute driver
-                 "return ((document.body && document.body.innerText) || '').trim().length > 0;")))
 
 (defn- normalized-text
   [value]
@@ -480,9 +434,7 @@
                 "const content = document.querySelector('#main-content') || document.body;
                  const text = ((content && content.innerText) || '').trim();
                  const hrefCount = document.querySelectorAll('a[href]').length;
-                 const relatedHrefCount =
-                   document.querySelectorAll(\"a[href*='/plugins/servlet/servicedesk/customer/confluence/shim/spaces/']\").length;
-                 return {text, hrefCount, relatedHrefCount};"))
+                 return {text, hrefCount};"))
 
 (defn- frame-content-ready?
   [driver expected-title]
@@ -497,50 +449,10 @@
 	             (pos? (long href-count))
 	             (> (count normalized-body) 1000)))))
 
-(defn- direct-service-desk-article-url?
-  [url]
-  (and (article-url? url)
-       (not (str/includes? url "/topic/"))))
-
-(defn- frame-related-links-count
-  [driver]
-  (let [result (frame-content-state driver)]
-    (long (or (get result "relatedHrefCount")
-              (:relatedHrefCount result)
-              0))))
-
-(defn- wait-for-related-links!
-  "Related shim links render shortly after the frame body, but articles with
-   zero or one of them would otherwise wait out the full timeout. Stop early
-   once the count exceeds the article's own link or has stopped changing for a
-   few consecutive samples."
-  [driver source-cfg]
-  (let [timeout-ms (or (:iframe_related_links_timeout_ms source-cfg)
-                       default-iframe-related-links-timeout-ms)
-        interval-ms (wait-interval-ms source-cfg)
-        deadline-ns (+ (System/nanoTime) (* timeout-ms 1000000))]
-    (loop [previous-count -1
-           stable-count 0]
-      (let [related-count (frame-related-links-count driver)
-            stable-count (if (= related-count previous-count)
-                           (inc stable-count)
-                           0)]
-        (when-not (or (> related-count 1)
-                      (>= stable-count default-iframe-related-links-stable-count)
-                      (>= (System/nanoTime) deadline-ns))
-          (pause! interval-ms)
-          (recur related-count stable-count))))))
-
 (defn- wait-for-frame-content!
   [driver source-cfg expected-title outer-url]
   (wait-until source-cfg #(frame-content-ready? driver expected-title))
-  (when (direct-service-desk-article-url? outer-url)
-    (wait-for-related-links! driver source-cfg)))
-
-(defn- article-url?
-  [url]
-  (and (string? url)
-       (str/includes? url "/article/")))
+  ((:await-extra-frame-content! (profile source-cfg)) driver source-cfg outer-url))
 
 (defn- stabilized-url
   [driver original-url source-cfg]
@@ -565,13 +477,24 @@
                   (recur (dec remaining) current-url stable-count)))
               (recur (dec remaining) current-url 0))))))))
 
+(defn- profile-extras
+  "Run the profile's in-page metadata extraction, returning {:description
+   :fallback_url} or nil. No-op (and no extra round-trip) for profiles without
+   an :extras-js."
+  [driver profile-map]
+  (when-let [js (:extras-js profile-map)]
+    (let [result (e/js-execute driver js)]
+      {:description (or (get result "description") (:description result))
+       :fallback_url (or (get result "fallbackUrl") (:fallbackUrl result))})))
+
 (defn- execute-cleanup
-  [driver source-cfg]
+  [driver source-cfg description]
   (e/js-execute driver
                 cleanup-script
                 (remove-selectors source-cfg)
                 (internal-link-hosts source-cfg)
-                (:preserve_external_links source-cfg)))
+                (:preserve_external_links source-cfg)
+                description))
 
 (defn- page-info
   [driver]
@@ -581,21 +504,10 @@
                                 const href = a.href || a.getAttribute('href');
                                 if (href) hrefs.add(href);
                               });
-                              const payload = () => {
-                                try {
-                                  const payloadText = document.querySelector('#jsonPayload')?.textContent;
-                                  if (!payloadText) return null;
-                                  return JSON.parse(payloadText);
-                                } catch (e) {
-                                  return null;
-                                }
-                              };
-                              const payloadJson = payload();
                               return {
                                 url: window.location.href,
                                 title: document.title || '',
                                 hrefs: Array.from(hrefs),
-                                fallbackUrl: payloadJson?.portal?.kbPage?.url || null,
                                 iframeUrl: document.querySelector('iframe')?.src || null
                               };")
         hrefs (or (get result "hrefs") (:hrefs result) [])]
@@ -603,7 +515,7 @@
      :title (or (get result "title") (:title result))
      :body ""
      :hrefs hrefs
-     :fallback_url (or (get result "fallbackUrl") (:fallbackUrl result))
+     :fallback_url nil
      :iframe_url (or (get result "iframeUrl") (:iframeUrl result))}))
 
 (defn- cleanup-result->page
@@ -615,11 +527,14 @@
      :title title
      :body html
      :hrefs hrefs
-     :fallback_url (or (get result "fallbackUrl") (:fallbackUrl result))}))
+     :fallback_url nil}))
 
 (defn- render-current-frame
   [driver source-cfg]
-  (cleanup-result->page driver (execute-cleanup driver source-cfg)))
+  (let [extras (profile-extras driver (profile source-cfg))
+        page (cleanup-result->page driver (execute-cleanup driver source-cfg (:description extras)))]
+    (cond-> page
+      (:fallback_url extras) (assoc :fallback_url (:fallback_url extras)))))
 
 (defn- render-first-iframe
   [driver source-cfg expected-title outer-url]
@@ -654,10 +569,19 @@
          :fallback_url (:fallback_url outer)
          :hrefs (vec (distinct (concat (:hrefs outer) (:hrefs iframe))))))
 
+(defn- outer-shell
+  "Capture the outer page before switching into its iframe: generic link/title
+   info plus any profile fallback URL (read from the top frame, where in-page
+   metadata such as a JSM jsonPayload lives)."
+  [driver source-cfg]
+  (let [extras (profile-extras driver (profile source-cfg))]
+    (cond-> (page-info driver)
+      (:fallback_url extras) (assoc :fallback_url (:fallback_url extras)))))
+
 (defn- render-current-page
   [driver source-cfg]
   (let [had-iframe? (iframe-present? driver)
-        shell (when had-iframe? (page-info driver))]
+        shell (when had-iframe? (outer-shell driver source-cfg))]
     (if had-iframe?
       (if-let [iframe (render-first-iframe driver source-cfg (:title shell) (:url shell))]
         (if (blank-html? (:body iframe))
@@ -685,14 +609,14 @@
   [driver source-cfg url]
   (e/set-page-load-timeout driver (or (:page_load_timeout_seconds source-cfg)
                                       default-page-load-timeout-seconds))
-  (let [initial (go-and-render driver source-cfg url)
-        ;; fallback_url is read from the page's #jsonPayload (untrusted); only
-        ;; follow it when it passes the source allow/deny rules (SSRF guard).
-        fallback-url (let [u (:fallback_url initial)]
+  (let [profile-map (profile source-cfg)
+        initial (go-and-render driver source-cfg url)
+        ;; the profile decides whether a blank render should retry at another
+        ;; URL (e.g. JSM's jsonPayload kbPage); the candidate is still subject to
+        ;; the SSRF/scope guard because it comes from untrusted page content.
+        fallback-url (let [u ((:blank-fallback-url profile-map) source-cfg url initial)]
                        (when (navigable? source-cfg u) u))
-        rendered (if (and fallback-url
-                          (article-url? url)
-                          (blank-html? (:body initial)))
+        rendered (if fallback-url
                    (assoc (go-and-render driver source-cfg fallback-url)
                           :url (:url initial)
                           :fallback_url fallback-url)
@@ -716,8 +640,7 @@
      :fallback_url (:fallback_url rendered)
      :hrefs (->> hrefs
                  (keep #(url/normalize canonical-url %))
-                 (map #(contextualize-article-url canonical-url %))
-                 (mapcat expand-article-url-variants)
+                 ((:transform-hrefs profile-map) canonical-url)
                  distinct
                  vec)}))
 
