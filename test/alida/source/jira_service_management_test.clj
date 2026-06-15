@@ -1,11 +1,12 @@
 (ns alida.source.jira-service-management-test
   (:require [alida.source :as source]
-            [alida.source.jira-service-management]
+            [alida.source.jira-service-management :as jsm]
             [alida.source.webdriver :as webdriver]
             [alida.test-helpers :refer [fake-http]]
             [clojure.data.json :as json]
             [clojure.string :as str]
-            [clojure.test :refer [deftest is]]))
+            [clojure.test :refer [deftest is]]
+            [etaoin.api :as e]))
 
 (def workspace-id "123e4567-e89b-12d3-a456-426614174000")
 
@@ -286,3 +287,153 @@
     (is (= #{"https://example.atlassian.net/servicedesk/customer/portal/1/article/1001"
              "https://second.example.atlassian.net/servicedesk/customer/portal/2/article/2001"}
            (set (mapv :canonical_url items))))))
+
+;; ---- Rendered (WebDriver) crawl: render profile ----
+
+(def ^:private jsm-profile (webdriver/render-profile "jira-service-management"))
+
+(deftest jsm-profile-supplies-expected-hooks
+  (is (= #{:content-wait-selectors :remove-selectors :wait-selectors
+           :transform-hrefs :extras-js :blank-fallback-url
+           :await-extra-frame-content!}
+         (set (keys jsm-profile))))
+  (is (string? (:extras-js jsm-profile))))
+
+(deftest jsm-wait-selectors-are-url-aware
+  (let [source-cfg {:render_profile "jira-service-management"
+                    :content_wait_selectors ["main article"]}]
+    (is (= ["a[href*='/topic/']"]
+           (#'webdriver/wait-selectors-for-url source-cfg
+                                               "https://example.test/servicedesk/customer/portals")))
+    (is (= ["a[href*='/article/']"]
+           (#'webdriver/wait-selectors-for-url source-cfg
+                                               "https://example.test/servicedesk/customer/portal/7/topic/abc")))
+    (is (= ["iframe"]
+           (#'webdriver/wait-selectors-for-url source-cfg
+                                               "https://example.test/servicedesk/customer/portal/7/article/123")))
+    (is (= ["iframe"]
+           (#'webdriver/wait-selectors-for-url source-cfg
+                                               "https://example.test/servicedesk/customer/portal/7/topic/abc/article/123")))
+    ;; non-special URLs fall back to the configured content-wait selectors
+    (is (= ["main article"]
+           (#'webdriver/wait-selectors-for-url source-cfg
+                                               "https://example.test/servicedesk/customer/portal/7")))))
+
+(deftest jsm-waits-use-current-url-after-redirect
+  (let [selectors (atom nil)]
+    (with-redefs-fn {#'e/get-url (fn [_] "https://example.test/servicedesk/customer/portal/7/article/123")
+                     #'webdriver/page-ready? (fn [_] true)
+                     #'webdriver/any-selector-present? (fn [_ observed-selectors]
+                                                         (reset! selectors observed-selectors)
+                                                         true)}
+      (fn []
+        (#'webdriver/wait-for-page!
+         :driver
+         {:render_profile "jira-service-management"
+          :wait_timeout_ms 1
+          :wait_interval_ms 1}
+         "https://example.test/plugins/servlet/servicedesk/customer/confluence/shim/x/abc")
+        (is (= ["iframe"] @selectors))))))
+
+(deftest jsm-direct-article-links-keep-topic-context
+  (is (= "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"
+         (#'jsm/contextualize-article-url
+          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/999"
+          "https://example.test/servicedesk/customer/portal/7/article/123")))
+  (is (= "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"
+         (#'jsm/contextualize-article-url
+          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/999"
+          "https://example.test/plugins/servlet/servicedesk/customer/confluence/shim/spaces/API/pages/123")))
+  (is (= "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"
+         (#'jsm/contextualize-article-url
+          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/999"
+          "https://example.test/wiki/spaces/KD/pages/123/Example")))
+  (is (= "https://example.test/servicedesk/customer/portal/7/topic/topic-2/article/123"
+         (#'jsm/contextualize-article-url
+          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/999"
+          "https://example.test/servicedesk/customer/portal/7/topic/topic-2/article/123")))
+  (is (= "https://example.test/servicedesk/customer/portal/7/article/123"
+         (#'jsm/contextualize-article-url
+          "https://example.test/servicedesk/customer/portal/7/article/999"
+          "https://example.test/servicedesk/customer/portal/7/article/123"))))
+
+(deftest jsm-confluence-links-on-direct-article-pages-become-direct-article-urls
+  (is (= "https://example.test/servicedesk/customer/portal/7/article/123"
+         (#'jsm/contextualize-article-url
+          "https://example.test/servicedesk/customer/portal/7/article/999"
+          "https://example.test/plugins/servlet/servicedesk/customer/confluence/shim/spaces/KD/pages/123/Related")))
+  (is (= "https://example.test/servicedesk/customer/portal/7/article/123"
+         (#'jsm/contextualize-article-url
+          "https://example.test/servicedesk/customer/portal/7/article/999"
+          "https://example.test/wiki/spaces/KD/pages/123/Related"))))
+
+(deftest jsm-topic-article-links-also-enqueue-direct-article-urls
+  (is (= "https://example.test/servicedesk/customer/portal/7/article/123"
+         (#'jsm/direct-article-url
+          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123")))
+  (is (nil? (#'jsm/direct-article-url
+             "https://example.test/servicedesk/customer/portal/7/article/123")))
+  (is (= ["https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"
+          "https://example.test/servicedesk/customer/portal/7/article/123"]
+         (#'jsm/expand-article-url-variants
+          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"))))
+
+(deftest jsm-transform-hrefs-contextualizes-and-expands
+  (is (= ["https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"
+          "https://example.test/servicedesk/customer/portal/7/article/123"]
+         ((:transform-hrefs jsm-profile)
+          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/999"
+          ["https://example.test/servicedesk/customer/portal/7/article/123"]))))
+
+(deftest jsm-blank-fallback-url-only-for-blank-articles
+  (let [fallback (:blank-fallback-url jsm-profile)
+        article "https://example.test/servicedesk/customer/portal/7/article/1"]
+    ;; blank article with a fallback url -> retry there
+    (is (= "https://example.test/kb"
+           (fallback {} article {:fallback_url "https://example.test/kb" :body "<main></main>"})))
+    ;; non-blank article -> no retry
+    (is (nil? (fallback {} article {:fallback_url "https://example.test/kb"
+                                    :body "<main>Real content</main>"})))
+    ;; no fallback url available -> no retry
+    (is (nil? (fallback {} article {:fallback_url nil :body "<main></main>"})))
+    ;; non-article page -> no retry even if blank
+    (is (nil? (fallback {} "https://example.test/servicedesk/customer/portals"
+                        {:fallback_url "https://example.test/kb" :body "<main></main>"})))))
+
+(deftest jsm-related-links-wait-stops-once-related-links-appear
+  (let [counts (atom [0 1 2 7 9])
+        samples (atom 0)]
+    (with-redefs-fn {#'jsm/frame-related-links-count
+                     (fn [_]
+                       (swap! samples inc)
+                       (let [[n & more] @counts]
+                         (when more (reset! counts more))
+                         n))}
+      (fn []
+        (#'jsm/wait-for-related-links! :driver {:wait_interval_ms 1})
+        ;; stops at the first sample greater than one (0, 1, 2)
+        (is (= 3 @samples))))))
+
+(deftest jsm-related-links-wait-stops-when-count-is-stable
+  (let [samples (atom 0)]
+    (with-redefs-fn {#'jsm/frame-related-links-count
+                     (fn [_]
+                       (swap! samples inc)
+                       0)}
+      (fn []
+        (#'jsm/wait-for-related-links! :driver {:wait_interval_ms 1
+                                                :iframe_related_links_timeout_ms 60000})
+        ;; an unchanged count ends the wait after a few samples instead of
+        ;; sitting out the full timeout
+        (is (= 4 @samples))))))
+
+(deftest jsm-await-extra-frame-content-only-for-direct-articles
+  (let [awaited (atom [])]
+    (with-redefs-fn {#'jsm/wait-for-related-links! (fn [_ _] (swap! awaited conj :waited))}
+      (fn []
+        ((:await-extra-frame-content! jsm-profile) :driver {}
+         "https://example.test/servicedesk/customer/portal/7/article/123")
+        ((:await-extra-frame-content! jsm-profile) :driver {}
+         "https://example.test/servicedesk/customer/portal/7/topic/abc/article/123")
+        ;; only the direct (non-topic) article triggers the related-links wait
+        (is (= [:waited] @awaited))))))

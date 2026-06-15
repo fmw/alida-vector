@@ -411,117 +411,63 @@
     (is (= :alida.source.webdriver/missing-rendered-body
            (get-in result [:alida/error :type])))))
 
-(deftest fallback-rendering-is-limited-to-article-pages
-  (is (#'webdriver/article-url? "https://example.test/servicedesk/customer/portal/7/article/123"))
-  (is (#'webdriver/article-url? "https://example.test/servicedesk/customer/portal/7/topic/abc/article/123"))
-  (is (not (#'webdriver/article-url? "https://example.test/servicedesk/customer/portal/7/topic/abc")))
-  (is (not (#'webdriver/article-url? "https://example.test/servicedesk/customer/portals"))))
-
-(deftest wait-selectors-are-url-aware
-  (let [source-cfg {:render_profile "jira-service-management"
-                    :content_wait_selectors ["main article"]}]
-    (is (= ["a[href*='/topic/']"]
-           (#'webdriver/wait-selectors-for-url source-cfg
-                                         "https://example.test/servicedesk/customer/portals")))
-    (is (= ["a[href*='/article/']"]
-           (#'webdriver/wait-selectors-for-url source-cfg
-                                         "https://example.test/servicedesk/customer/portal/7/topic/abc")))
-    (is (= ["iframe"]
-           (#'webdriver/wait-selectors-for-url source-cfg
-                                         "https://example.test/servicedesk/customer/portal/7/article/123")))
-    (is (= ["iframe"]
-           (#'webdriver/wait-selectors-for-url source-cfg
-                                         "https://example.test/servicedesk/customer/portal/7/topic/abc/article/123")))))
-
-(deftest generic-webdriver-article-urls-use-configured-wait-selectors
+(deftest generic-profile-falls-back-to-configured-wait-selectors
   (let [source-cfg {:content_wait_selectors ["main article"]}]
     (is (= ["main article"]
            (#'webdriver/wait-selectors-for-url source-cfg
                                                "https://example.test/article/foo")))))
 
-(deftest direct-article-links-keep-topic-context
-  (is (= "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"
-         (#'webdriver/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/999"
-          "https://example.test/servicedesk/customer/portal/7/article/123")))
-  (is (= "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"
-         (#'webdriver/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/999"
-          "https://example.test/plugins/servlet/servicedesk/customer/confluence/shim/spaces/API/pages/123")))
-  (is (= "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"
-         (#'webdriver/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/999"
-          "https://example.test/wiki/spaces/KD/pages/123/Example")))
-  (is (= "https://example.test/servicedesk/customer/portal/7/topic/topic-2/article/123"
-         (#'webdriver/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/999"
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-2/article/123")))
-  (is (= "https://example.test/servicedesk/customer/portal/7/article/123"
-         (#'webdriver/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/article/999"
-          "https://example.test/servicedesk/customer/portal/7/article/123"))))
+(deftest generic-profile-has-no-default-wait-selectors
+  ;; with no render_profile and no configured selectors there are no content
+  ;; selectors to await; the engine falls back to a body-text readiness check
+  ;; (see generic-page-readiness-waits-for-body-text) rather than treating the
+  ;; always-present <body> as ready
+  (is (nil? (#'webdriver/wait-selectors-for-url {} "https://example.test/anything"))))
 
-(deftest confluence-links-on-direct-article-pages-become-direct-article-urls
-  (is (= "https://example.test/servicedesk/customer/portal/7/article/123"
-         (#'webdriver/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/article/999"
-          "https://example.test/plugins/servlet/servicedesk/customer/confluence/shim/spaces/KD/pages/123/Related")))
-  (is (= "https://example.test/servicedesk/customer/portal/7/article/123"
-         (#'webdriver/contextualize-article-url
-          "https://example.test/servicedesk/customer/portal/7/article/999"
-          "https://example.test/wiki/spaces/KD/pages/123/Related"))))
-
-(deftest topic-article-links-also-enqueue-direct-article-urls
-  (is (= "https://example.test/servicedesk/customer/portal/7/article/123"
-         (#'webdriver/direct-article-url
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123")))
-  (is (nil? (#'webdriver/direct-article-url
-             "https://example.test/servicedesk/customer/portal/7/article/123")))
-  (is (= ["https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"
-          "https://example.test/servicedesk/customer/portal/7/article/123"]
-         (#'webdriver/expand-article-url-variants
-          "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"))))
-
-(deftest related-links-wait-stops-once-related-links-appear
-  (let [counts (atom [0 1 2 7 9])
-        samples (atom 0)]
-    (with-redefs [webdriver/frame-content-state
-                  (fn [_]
-                    (swap! samples inc)
-                    {:relatedHrefCount (let [[n & more] @counts]
-                                         (when more (reset! counts more))
-                                         n)})]
-      (#'webdriver/wait-for-related-links! :driver {:wait_interval_ms 1})
-      ;; stops at the first sample greater than one (0, 1, 2)
-      (is (= 3 @samples)))))
-
-(deftest related-links-wait-stops-when-count-is-stable
-  (let [samples (atom 0)]
-    (with-redefs [webdriver/frame-content-state
-                  (fn [_]
-                    (swap! samples inc)
-                    {:relatedHrefCount 0})]
-      (#'webdriver/wait-for-related-links! :driver {:wait_interval_ms 1
-                                                    :iframe_related_links_timeout_ms 60000})
-      ;; an unchanged count ends the wait after a few samples instead of
-      ;; sitting out the full timeout
-      (is (= 4 @samples)))))
-
-(deftest waits-use-current-url-after-redirect
-  (let [selectors (atom nil)]
-    (with-redefs-fn {#'e/get-url (fn [_] "https://example.test/servicedesk/customer/portal/7/article/123")
+(deftest generic-page-readiness-waits-for-body-text
+  (let [selector-checked (atom false)
+        text-checked (atom false)]
+    (with-redefs-fn {#'e/get-url (fn [_] "https://example.test/page")
                      #'webdriver/page-ready? (fn [_] true)
-                     #'webdriver/any-selector-present? (fn [_ observed-selectors]
-                                                   (reset! selectors observed-selectors)
-                                                   true)}
+                     #'webdriver/any-selector-present? (fn [_ _] (reset! selector-checked true) true)
+                     #'webdriver/frame-text-present? (fn [_] (reset! text-checked true) true)}
       (fn []
-      (#'webdriver/wait-for-page!
-       :driver
-       {:render_profile "jira-service-management"
-        :wait_timeout_ms 1
-        :wait_interval_ms 1}
-       "https://example.test/plugins/servlet/servicedesk/customer/confluence/shim/x/abc")
-      (is (= ["iframe"] @selectors))))))
+        (#'webdriver/wait-for-page! :driver
+                                    {:wait_timeout_ms 1 :wait_interval_ms 1}
+                                    "https://example.test/page")
+        ;; readiness came from body text, not from the always-present <body>
+        (is @text-checked)
+        (is (not @selector-checked))))))
+
+(deftest configured-wait-selectors-take-precedence-over-body-text
+  (let [selector-checked (atom false)
+        text-checked (atom false)]
+    (with-redefs-fn {#'e/get-url (fn [_] "https://example.test/page")
+                     #'webdriver/page-ready? (fn [_] true)
+                     #'webdriver/any-selector-present? (fn [_ _] (reset! selector-checked true) true)
+                     #'webdriver/frame-text-present? (fn [_] (reset! text-checked true) true)}
+      (fn []
+        (#'webdriver/wait-for-page! :driver
+                                    {:content_wait_selectors [".article"]
+                                     :wait_timeout_ms 1 :wait_interval_ms 1}
+                                    "https://example.test/page")
+        ;; an explicit selector is awaited strictly; body text is not consulted
+        (is @selector-checked)
+        (is (not @text-checked))))))
+
+(deftest generic-profile-does-not-rewrite-discovered-links
+  ;; the generic profile passes discovered links through untouched (no
+  ;; site-specific URL reshaping or variant expansion)
+  (let [transform (:transform-hrefs (webdriver/render-profile nil))]
+    (is (= ["https://example.test/a" "https://example.test/b"]
+           (transform "https://example.test/ctx"
+                      ["https://example.test/a" "https://example.test/b"])))))
+
+(deftest generic-profile-has-no-blank-fallback-or-extra-frame-wait
+  (let [generic (webdriver/render-profile nil)]
+    (is (nil? (:extras-js generic)))
+    (is (nil? ((:blank-fallback-url generic) {} "https://example.test/x" {:body ""})))
+    (is (nil? ((:await-extra-frame-content! generic) :driver {} "https://example.test/x")))))
 
 (deftest iframe-content-keeps-outer-url-and-title
   (is (= {:url "https://example.test/portal/topic/a/article/1"
