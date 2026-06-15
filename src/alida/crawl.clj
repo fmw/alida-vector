@@ -4,6 +4,7 @@
             [alida.diff :as diff]
             [alida.embed :as embed]
             [alida.extract.html :as html]
+            [alida.extract.text :as extract-text]
             [alida.lang :as lang]
             [alida.notify.slack :as slack]
             [alida.report :as report]
@@ -24,6 +25,13 @@
   (let [content-type (str/lower-case (or content-type ""))]
     (or (str/starts-with? content-type "text/html")
         (str/starts-with? content-type "application/xhtml+xml"))))
+
+(defn- text-content?
+  [content-type]
+  (let [content-type (str/lower-case (or content-type ""))]
+    (or (str/starts-with? content-type "text/plain")
+        (str/starts-with? content-type "text/markdown")
+        (str/starts-with? content-type "application/json"))))
 
 (defn- error-details
   [value details]
@@ -58,9 +66,16 @@
 
 (defn- extract-document
   [source-cfg fetched]
-  (if (html-content? (:content_type fetched))
+  (cond
+    (html-content? (:content_type fetched))
     (cond-> (html/extract source-cfg fetched)
       (:external_id fetched) (assoc :external_id (:external_id fetched)))
+
+    (text-content? (:content_type fetched))
+    (cond-> (extract-text/extract source-cfg fetched)
+      (:external_id fetched) (assoc :external_id (:external_id fetched)))
+
+    :else
     (source/anomaly :cognitect.anomalies/unsupported
                     {:type :alida.crawl/unsupported-content-type
                      :source-id (:id source-cfg)
