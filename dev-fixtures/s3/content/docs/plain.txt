@@ -1,0 +1,4 @@
+Plain text fixture content.
+
+This file validates that text/plain objects are fetched from S3 and routed
+through the generic text extractor.

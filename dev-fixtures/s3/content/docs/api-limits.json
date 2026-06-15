@@ -1,0 +1,5 @@
+{
+  "title": "API limits",
+  "body": "Integrations should avoid polling continuously and should back off after transient errors.",
+  "tags": ["api", "limits", "integration"]
+}

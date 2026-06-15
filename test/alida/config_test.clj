@@ -51,6 +51,14 @@
        (load-from-map (assoc-in valid-config [:indexes 0 :sources 0]
                                 {:id "support" :type "jira-service-management"})))))
 
+(deftest rejects-s3-source-without-bucket
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo #"requires bucket"
+       (load-from-map (assoc-in valid-config [:indexes 0 :sources 0]
+                                {:id "objects"
+                                 :type "s3"
+                                 :prefix "docs/"})))))
+
 (deftest structural-hash-redacts-secrets
   (testing "secret values do not change the structural hash"
     (is (= (config/structural-config-hash (assoc-in valid-config [:verification :api_key] "a"))
@@ -799,12 +807,19 @@ indexes:
         browser_restart_after_pages: 50
         browser_restart_after_failures: 2
         progress_log_every_pages: 25
+      - id: objects
+        type: s3
+        bucket: alida-fixtures
+        prefix: docs/
+        region: eu-west-1
+        include_globs: [docs/**/*.md, docs/**/*.json]
+        exclude_globs: [docs/private/**]
 ")
       (let [index (-> (config/load-config (.getPath file)) :indexes first)
             sources (:sources index)]
         (is (= 100 (-> index :embedding :retry_jitter_ms)))
         (is (= 250 (-> index :embedding :inter_batch_delay_ms)))
-        (is (= ["local" "website" "jira-service-management"] (mapv :type sources)))
+        (is (= ["local" "website" "jira-service-management" "s3"] (mapv :type sources)))
         (is (= ["html" "md"] (-> sources first :include_extensions)))
         (is (= ["https://example.test/docs/"] (-> sources second :allowed_url_prefixes)))
         (is (= ["https://example.test/docs/secret"] (-> sources second :denied_urls)))
@@ -820,7 +835,12 @@ indexes:
         (is (= 20 (-> sources (nth 2) :page_load_timeout_seconds)))
         (is (= 50 (-> sources (nth 2) :browser_restart_after_pages)))
         (is (= 2 (-> sources (nth 2) :browser_restart_after_failures)))
-        (is (= 25 (-> sources (nth 2) :progress_log_every_pages))))
+        (is (= 25 (-> sources (nth 2) :progress_log_every_pages)))
+        (is (= "alida-fixtures" (-> sources (nth 3) :bucket)))
+        (is (= "docs/" (-> sources (nth 3) :prefix)))
+        (is (= "eu-west-1" (-> sources (nth 3) :region)))
+        (is (= ["docs/**/*.md" "docs/**/*.json"] (-> sources (nth 3) :include_globs)))
+        (is (= ["docs/private/**"] (-> sources (nth 3) :exclude_globs))))
       (finally
         (.delete file)))))
 
