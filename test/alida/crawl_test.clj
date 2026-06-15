@@ -53,14 +53,14 @@
 
 (deftest process-source-keeps-item-level-errors
   (let [html-file (temp-file ".html" "<h1>Hello</h1><p>This document can be processed.</p>")
-        text-file (temp-file ".txt" "plain text is not supported by the HTML extractor")
+        bin-file (temp-file ".bin" "binary-ish content is not a supported document type")
         result (crawl/process-source
                 {}
                 index-cfg
                 {:id "fixtures"
                  :type "local"
                  :paths [(.getPath html-file)
-                         (.getPath text-file)
+                         (.getPath bin-file)
                          "/tmp/alida-crawl-missing.html"]})]
     (is (= 3 (:discovered_count result)))
     (is (= 1 (:document_count result)))
@@ -69,6 +69,26 @@
     (is (= #{:alida.crawl/unsupported-content-type
              :alida.source.local/file-not-found}
            (set (map :type (:errors result)))))))
+
+(deftest process-source-extracts-text-markdown-and-json
+  (let [text-file (temp-file ".txt" "Plain document\n\nwith two paragraphs.")
+        markdown-file (temp-file ".md" "# Guide\n\nInstall the app.")
+        json-file (temp-file ".json" "{\"title\":\"API\",\"body\":\"Use stable endpoints.\"}")
+        result (crawl/process-source
+                {}
+                index-cfg
+                {:id "fixtures"
+                 :type "local"
+                 :paths [(.getPath text-file)
+                         (.getPath markdown-file)
+                         (.getPath json-file)]})]
+    (is (= 3 (:discovered_count result)))
+    (is (= 3 (:document_count result)))
+    (is (= 0 (:error_count result)))
+    (is (= #{"text/plain" "text/markdown" "application/json"}
+           (set (map (comp :content_type :document) (:documents result)))))
+    (is (every? #(= 64 (count (get-in % [:document :normalized_content_hash])))
+                (:documents result)))))
 
 (deftest process-source-records-empty-extracted-pages-as-item-errors
   (let [file (temp-file ".html"
