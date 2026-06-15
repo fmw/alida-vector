@@ -162,11 +162,85 @@
                      {:id "support"
                       :type "webdriver"
                       :url "https://example.test/portal"
+                      :render_failure_retries 0
                       :browser_restart_after_failures 2})]
           (is (= 3 (count items)))
           (is (= [:driver-1 :driver-2] @quits)))))))
 
-(deftest discovery-retries-blank-render-with-a-fresh-browser
+(deftest discovery-requeues-failed-renders-until-one-succeeds
+  (let [starts (atom 0)
+        calls (atom [])]
+    (with-redefs-fn {#'webdriver/start-driver! (fn [_]
+                                                 (keyword (str "driver-" (swap! starts inc))))
+                     #'webdriver/quit-driver! (fn [_])
+                     #'webdriver/render-page! (fn [driver _ url]
+                                                (swap! calls conj [driver url])
+                                                (if (= driver :driver-1)
+                                                  (source/anomaly :cognitect.anomalies/fault
+                                                                  {:type :test/render-failed
+                                                                   :canonical-url url})
+                                                  (page url [])))}
+      (fn []
+        (let [items (source/discover
+                     {}
+                     {:id "support"
+                      :type "webdriver"
+                      :url "https://example.test/portal"})]
+          (is (= 1 (count items)))
+          (is (not (source/anomaly? (first items))))
+          ;; two failures on the first browser (the second triggers the
+          ;; consecutive-failure restart), then success on the fresh one
+          (is (= [[:driver-1 "https://example.test/portal"]
+                  [:driver-1 "https://example.test/portal"]
+                  [:driver-2 "https://example.test/portal"]]
+                 @calls)))))))
+
+(deftest parallel-discovery-requeues-failed-renders
+  (let [calls (atom 0)]
+    (with-redefs-fn {#'webdriver/start-driver! (fn [_] :driver)
+                     #'webdriver/quit-driver! (fn [_])
+                     #'webdriver/render-page! (fn [_ _ url]
+                                                (if (= 1 (swap! calls inc))
+                                                  (source/anomaly :cognitect.anomalies/fault
+                                                                  {:type :test/render-failed
+                                                                   :canonical-url url})
+                                                  (page url [])))}
+      (fn []
+        (let [items (source/discover
+                     {}
+                     {:id "support"
+                      :type "webdriver"
+                      :url "https://example.test/portal"
+                      :max_concurrency 2
+                      :browser_restart_after_failures 0})]
+          (is (= 1 (count items)))
+          (is (not (source/anomaly? (first items))))
+          (is (= 2 @calls)))))))
+
+(deftest render-failure-retries-can-be-disabled
+  (let [calls (atom 0)]
+    (with-redefs-fn {#'webdriver/start-driver! (fn [_] :driver)
+                     #'webdriver/quit-driver! (fn [_])
+                     #'webdriver/render-page! (fn [_ _ url]
+                                                (swap! calls inc)
+                                                (source/anomaly :cognitect.anomalies/fault
+                                                                {:type :test/render-failed
+                                                                 :canonical-url url}))}
+      (fn []
+        (let [items (source/discover
+                     {}
+                     {:id "support"
+                      :type "webdriver"
+                      :url "https://example.test/portal"
+                      :render_failure_retries 0})]
+          (is (= 1 (count items)))
+          (is (source/anomaly? (first items)))
+          (is (= 1 @calls)))))))
+
+(deftest discovery-reretries-blank-render-in-the-same-browser
+  ;; A blank render is retried once in place; the browser is NOT restarted,
+  ;; because a blank is content that never materialized rather than a corrupt
+  ;; browser session, and a fresh browser reproduces it identically.
   (let [starts (atom 0)
         quits (atom [])
         calls (atom [])]
@@ -176,7 +250,7 @@
                                           (swap! quits conj driver))
                      #'webdriver/render-page! (fn [driver _ url]
                                           (swap! calls conj [driver url])
-                                          (if (= driver :driver-1)
+                                          (if (= 1 (count @calls))
                                             (assoc (page url []) :body "<body></body>")
                                             (page url [])))}
       (fn []
@@ -184,17 +258,17 @@
                      {}
                      {:id "support"
                       :type "webdriver"
-                      :url "https://example.test/portal"
-                      :browser_restart_after_pages 50})]
+                      :url "https://example.test/portal"})]
           (is (= 1 (count items)))
           (is (= "<main><h1>https://example.test/portal</h1><p>Rendered article.</p></main>"
                  (:body (first items))))
+          ;; both renders ran on the original browser — no restart
           (is (= [[:driver-1 "https://example.test/portal"]
-                  [:driver-2 "https://example.test/portal"]]
+                  [:driver-1 "https://example.test/portal"]]
                  @calls))
-          (is (= [:driver-1 :driver-2] @quits)))))))
+          (is (= 1 @starts)))))))
 
-(deftest discovery-retries-blank-render-at-canonical-url
+(deftest discovery-reretries-blank-render-at-canonical-url
   (let [starts (atom 0)
         calls (atom [])]
     (with-redefs-fn {#'webdriver/start-driver! (fn [_]
@@ -202,7 +276,7 @@
                      #'webdriver/quit-driver! (fn [_])
                      #'webdriver/render-page! (fn [driver _ url]
                                           (swap! calls conj [driver url])
-                                          (if (= driver :driver-1)
+                                          (if (= 1 (count @calls))
                                             (assoc (page "https://example.test/canonical" [])
                                                    :body "<body></body>")
                                             (page url [])))}
@@ -214,8 +288,9 @@
                       :url "https://example.test/shim"})]
           (is (= ["https://example.test/canonical"]
                  (mapv :canonical_url items)))
+          ;; the in-place retry re-renders at the canonical URL, same browser
           (is (= [[:driver-1 "https://example.test/shim"]
-                  [:driver-2 "https://example.test/canonical"]]
+                  [:driver-1 "https://example.test/canonical"]]
                  @calls)))))))
 
 (deftest failed-navigation-returns-render-anomaly
@@ -290,6 +365,29 @@
                       :max_pages 1})]
           (is (= 1 (count items)))
           (is (= 1 (count @rendered))))))))
+
+(deftest parallel-discovery-retries-when-active-render-occupies-page-limit
+  (let [calls (atom 0)]
+    (with-redefs-fn {#'webdriver/start-driver! (fn [_] :driver)
+                     #'webdriver/quit-driver! (fn [_])
+                     #'webdriver/render-page! (fn [_ _ url]
+                                                (if (= 1 (swap! calls inc))
+                                                  (source/anomaly :cognitect.anomalies/fault
+                                                                  {:type :test/render-failed
+                                                                   :canonical-url url})
+                                                  (page url [])))}
+      (fn []
+        (let [items (source/discover
+                     {}
+                     {:id "support"
+                      :type "webdriver"
+                      :url "https://example.test/portal"
+                      :max_concurrency 2
+                      :max_pages 1
+                      :browser_restart_after_failures 0})]
+          (is (= 1 (count items)))
+          (is (not (source/anomaly? (first items))))
+          (is (= 2 @calls)))))))
 
 (deftest source-requires-a-start-url
   (is (thrown-with-msg?
@@ -384,13 +482,30 @@
          (#'webdriver/expand-article-url-variants
           "https://example.test/servicedesk/customer/portal/7/topic/topic-1/article/123"))))
 
-(deftest direct-article-frame-readiness-waits-for-related-shim-links
-  (with-redefs [webdriver/frame-content-state (fn [_]
-                                          {:relatedHrefCount 2})]
-    (is (#'webdriver/frame-related-links-ready? :driver)))
-  (with-redefs [webdriver/frame-content-state (fn [_]
-                                          {:relatedHrefCount 1})]
-    (is (not (#'webdriver/frame-related-links-ready? :driver)))))
+(deftest related-links-wait-stops-once-related-links-appear
+  (let [counts (atom [0 1 2 7 9])
+        samples (atom 0)]
+    (with-redefs [webdriver/frame-content-state
+                  (fn [_]
+                    (swap! samples inc)
+                    {:relatedHrefCount (let [[n & more] @counts]
+                                         (when more (reset! counts more))
+                                         n)})]
+      (#'webdriver/wait-for-related-links! :driver {:wait_interval_ms 1})
+      ;; stops at the first sample greater than one (0, 1, 2)
+      (is (= 3 @samples)))))
+
+(deftest related-links-wait-stops-when-count-is-stable
+  (let [samples (atom 0)]
+    (with-redefs [webdriver/frame-content-state
+                  (fn [_]
+                    (swap! samples inc)
+                    {:relatedHrefCount 0})]
+      (#'webdriver/wait-for-related-links! :driver {:wait_interval_ms 1
+                                                    :iframe_related_links_timeout_ms 60000})
+      ;; an unchanged count ends the wait after a few samples instead of
+      ;; sitting out the full timeout
+      (is (= 4 @samples)))))
 
 (deftest waits-use-current-url-after-redirect
   (let [selectors (atom nil)]

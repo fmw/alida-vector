@@ -9,6 +9,7 @@
 
 (def default-max-pages 1000)
 (def default-max-concurrency 20)
+(def default-webdriver-max-concurrency 5)
 (def default-category-page-limit 100)
 
 ;; The article view endpoint negotiates representation on Accept: without it the
@@ -337,28 +338,31 @@
         (discover-api* pool sys source-cfg))
       (discover-api* nil sys source-cfg))))
 
+(defn- webdriver-source-cfg
+  "Delegate config for the rendered crawl. Defaults to multiple parallel
+   browsers because a single browser makes a portal crawl take the better part
+   of an hour; an explicit max_concurrency still wins."
+  [source-cfg]
+  (-> source-cfg
+      (assoc :type "webdriver"
+             :render_profile "jira-service-management")
+      (update :max_concurrency #(or % default-webdriver-max-concurrency))))
+
 (defmethod source/discover :jira-service-management
   [sys source-cfg]
   (case (crawl-method source-cfg)
-    :webdriver (webdriver/discover-rendered sys (assoc source-cfg
-                                                       :type "webdriver"
-                                                       :render_profile "jira-service-management"))
+    :webdriver (webdriver/discover-rendered sys (webdriver-source-cfg source-cfg))
     :auto (try
             (discover-api sys source-cfg)
             (catch Exception _
-              (webdriver/discover-rendered sys (assoc source-cfg
-                                                     :type "webdriver"
-                                                     :render_profile "jira-service-management"))))
+              (webdriver/discover-rendered sys (webdriver-source-cfg source-cfg))))
     :api (discover-api sys source-cfg)
     (discover-api sys source-cfg)))
 
 (defmethod source/fetch :jira-service-management
   [sys source-cfg discovered-item]
   (if (= :webdriver (crawl-method source-cfg))
-    (webdriver/fetch-rendered sys (assoc source-cfg
-                                         :type "webdriver"
-                                         :render_profile "jira-service-management")
-                              discovered-item)
+    (webdriver/fetch-rendered sys (webdriver-source-cfg source-cfg) discovered-item)
     (cond
       (source/anomaly? discovered-item)
       discovered-item

@@ -79,6 +79,7 @@
    [:browser_args {:optional true} [:sequential :string]]
    [:browser_restart_after_pages {:optional true} :int]
    [:browser_restart_after_failures {:optional true} :int]
+   [:render_failure_retries {:optional true} :int]
    [:progress_log_every_pages {:optional true} :int]
    [:internal_link_hosts {:optional true} [:sequential :string]]
    [:preserve_external_links {:optional true} :boolean]
