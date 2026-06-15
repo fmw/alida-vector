@@ -151,10 +151,19 @@
 
 (deftest webdriver-crawl-method-delegates-to-generic-webdriver-source
   (with-redefs [webdriver/discover-rendered (fn [_ cfg]
-                                              [(select-keys cfg [:type :url])])]
+                                              [(select-keys cfg [:type :url :render_profile :max_concurrency])])]
     (is (= [{:type "webdriver"
-             :url (:url source-cfg)}]
-           (source/discover {} (assoc source-cfg :crawl_method "webdriver"))))))
+             :url (:url source-cfg)
+             :render_profile "jira-service-management"
+             :max_concurrency 5}]
+           (source/discover {} (assoc source-cfg :crawl_method "webdriver"))))
+    (is (= [{:type "webdriver"
+             :url (:url source-cfg)
+             :render_profile "jira-service-management"
+             :max_concurrency 2}]
+           (source/discover {} (assoc source-cfg
+                                      :crawl_method "webdriver"
+                                      :max_concurrency 2))))))
 
 (deftest auto-crawl-method-falls-back-to-webdriver-when-api-context-fails
   (with-redefs [webdriver/discover-rendered (fn [_ cfg]

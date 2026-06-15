@@ -69,11 +69,16 @@ indexes:
         denied_urls: []
         denied_url_prefixes: []
         max_pages: 1000
+        # api crawl: per-source request parallelism
         api_max_concurrency: 20
         api_category_page_limit: 100
-        max_concurrency: 4
+        # webdriver/auto crawl: number of parallel headless browsers
+        # (defaults to 5 when omitted)
+        max_concurrency: 5
         browser_restart_after_pages: 50
         browser_restart_after_failures: 2
+        # how many times a failed render is re-enqueued before giving up
+        render_failure_retries: 2
         progress_log_every_pages: 25
         dedupe_content: true
         dedupe_prefer_url_substrings:
