@@ -10,13 +10,15 @@
 (def default-max-pages 1000)
 (def default-page-load-timeout-seconds 30)
 (def default-wait-timeout-ms 30000)
-(def default-wait-interval-ms 250)
-(def default-url-stabilization-ms 500)
-(def default-url-stabilization-attempts 10)
+(def default-wait-interval-ms 100)
+(def default-url-stabilization-ms 100)
+(def default-url-stabilization-attempts 20)
 (def default-url-stabilization-stable-count 2)
 (def default-iframe-related-links-timeout-ms 5000)
+(def default-iframe-related-links-stable-count 3)
 (def default-browser-restart-after-pages 50)
 (def default-browser-restart-after-failures 2)
+(def default-render-failure-retries 2)
 (def default-progress-log-every-pages 25)
 (def default-max-concurrency 1)
 
@@ -30,7 +32,13 @@
    "[class*='article']"])
 
 (def default-browser-args
-  ["--no-sandbox"
+  ;; --headless=new plus a regular browser user-agent: the default
+  ;; HeadlessChrome user-agent is treated specially by some CDN bot mitigation,
+  ;; so present the same UA a regular browser would send.
+  ["--headless=new"
+   (str "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
+        "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
+   "--no-sandbox"
    "--disable-dev-shm-usage"
    "--disable-gpu"
    "--disable-blink-features=AutomationControlled"
@@ -52,11 +60,24 @@
    "--no-first-run"
    "--password-store=basic"
    "--use-mock-keychain"
-   "--disk-cache-dir=/tmp/alida-vector/chrome-cache"
    "--disk-cache-size=104857600"
    "--window-size=1920,1080"])
 
+(def ^:private driver-counter (java.util.concurrent.atomic.AtomicLong. 0))
+
+(defn- disk-cache-arg
+  "Chrome does not support multiple concurrent instances sharing one disk cache
+   directory, and the parallel crawl runs several browsers at once. Give every
+   driver its own directory."
+  []
+  (str "--disk-cache-dir=/tmp/alida-vector/chrome-cache-" (.incrementAndGet driver-counter)))
+
 (def cleanup-script
+  ;; The live DOM is read but never mutated: link replacement, selector removal,
+  ;; and description prepending all happen on a detached clone of the content
+  ;; element. Mutating the live page while the portal SPA is still hydrating
+  ;; throws its scripts into a busy loop that wedges the renderer (every later
+  ;; WebDriver call then fails with "timed out receiving message from renderer").
   "const removeSelectors = arguments[0] || [];
    const internalHosts = new Set((arguments[1] || []).map(host => String(host).toLowerCase()));
    const preserveExternalLinks = arguments[2] !== false;
@@ -125,8 +146,10 @@
      }
    }
 
-   if (preserveExternalLinks) {
-     document.querySelectorAll('a[href]').forEach(a => {
+   const clone = content ? content.cloneNode(true) : null;
+
+   if (clone && preserveExternalLinks) {
+     clone.querySelectorAll('a[href]').forEach(a => {
        const href = a.href || a.getAttribute('href');
        const text = (a.textContent || '').trim();
        const host = linkHost(href);
@@ -136,22 +159,23 @@
      });
    }
 
-   const description = categoryDescription();
-
-   for (const selector of removeSelectors) {
-     document.querySelectorAll(selector).forEach(el => el.remove());
+   if (clone) {
+     for (const selector of removeSelectors) {
+       clone.querySelectorAll(selector).forEach(el => el.remove());
+     }
    }
 
-   if (content && description && !(content.textContent || '').includes(description)) {
+   const description = categoryDescription();
+   if (clone && description && !(clone.textContent || '').includes(description)) {
      const p = document.createElement('p');
      p.textContent = description;
-     content.prepend(p);
+     clone.prepend(p);
    }
 
    return {
      url: window.location.href,
      title: document.title || '',
-     html: content ? content.outerHTML : document.documentElement.outerHTML,
+     html: clone ? clone.outerHTML : document.documentElement.outerHTML,
      hrefs: Array.from(hrefs),
      fallbackUrl: knowledgeBaseFallbackUrl()
    };")
@@ -213,6 +237,22 @@
   [source-cfg]
   (or (:browser_restart_after_failures source-cfg)
       default-browser-restart-after-failures))
+
+(defn- render-failure-retries
+  "How many times a failed render is re-enqueued at the back of the queue.
+   Transient renderer hangs and session crashes would otherwise drop the URL —
+   fatal when it is a seed (the whole crawl yields nothing) and a source of
+   run-to-run inconsistency for any other page. Re-enqueueing retries later,
+   usually on a browser that has rendered other pages in the meantime, instead
+   of immediately inside whatever condition caused the failure."
+  [source-cfg]
+  (or (:render_failure_retries source-cfg)
+      default-render-failure-retries))
+
+(defn- retry-render?
+  [source-cfg page attempt]
+  (and (source/anomaly? page)
+       (<= attempt (render-failure-retries source-cfg))))
 
 (defn- progress-log-every-pages
   [source-cfg]
@@ -314,7 +354,7 @@
 
 (defn- driver-options
   [source-cfg]
-  (cond-> {:args (browser-args source-cfg)
+  (cond-> {:args (conj (browser-args source-cfg) (disk-cache-arg))
            :capabilities {:pageLoadStrategy "eager"
                           :goog:chromeOptions
                           {:prefs {"profile.default_content_setting_values" {"images" 2}
@@ -326,8 +366,10 @@
     (assoc :path-browser (System/getenv "CHROME_BIN"))))
 
 (defn- start-driver!
+  "Plain e/chrome: headless mode comes from the --headless=new browser arg, not
+   etaoin's :headless capability (which selects the legacy headless mode)."
   [source-cfg]
-  (e/chrome-headless (driver-options source-cfg)))
+  (e/chrome (driver-options source-cfg)))
 
 (defn- quit-driver!
   [driver]
@@ -341,7 +383,10 @@
       nil)))
 
 (defn- restart-driver!
-  [current-driver source-cfg]
+  [current-driver source-cfg reason]
+  (u/log ::browser-restart
+         :source-id (:id source-cfg)
+         :reason reason)
   (safe-quit-driver! current-driver)
   (start-driver! source-cfg))
 
@@ -390,16 +435,6 @@
      (e/wait-predicate pred
                        {:timeout (/ (wait-timeout-ms source-cfg) 1000.0)
                         :interval (/ (wait-interval-ms source-cfg) 1000.0)}))
-    (catch Throwable _
-      false)))
-
-(defn- wait-until-for
-  [timeout-ms interval-ms pred]
-  (try
-    (boolean
-     (e/wait-predicate pred
-                       {:timeout (/ timeout-ms 1000.0)
-                        :interval (/ interval-ms 1000.0)}))
     (catch Throwable _
       false)))
 
@@ -467,22 +502,40 @@
   (and (article-url? url)
        (not (str/includes? url "/topic/"))))
 
-(defn- frame-related-links-ready?
+(defn- frame-related-links-count
   [driver]
-  (let [result (frame-content-state driver)
-        related-href-count (or (get result "relatedHrefCount")
-                               (:relatedHrefCount result)
-                               0)]
-    (> (long related-href-count) 1)))
+  (let [result (frame-content-state driver)]
+    (long (or (get result "relatedHrefCount")
+              (:relatedHrefCount result)
+              0))))
+
+(defn- wait-for-related-links!
+  "Related shim links render shortly after the frame body, but articles with
+   zero or one of them would otherwise wait out the full timeout. Stop early
+   once the count exceeds the article's own link or has stopped changing for a
+   few consecutive samples."
+  [driver source-cfg]
+  (let [timeout-ms (or (:iframe_related_links_timeout_ms source-cfg)
+                       default-iframe-related-links-timeout-ms)
+        interval-ms (wait-interval-ms source-cfg)
+        deadline-ns (+ (System/nanoTime) (* timeout-ms 1000000))]
+    (loop [previous-count -1
+           stable-count 0]
+      (let [related-count (frame-related-links-count driver)
+            stable-count (if (= related-count previous-count)
+                           (inc stable-count)
+                           0)]
+        (when-not (or (> related-count 1)
+                      (>= stable-count default-iframe-related-links-stable-count)
+                      (>= (System/nanoTime) deadline-ns))
+          (pause! interval-ms)
+          (recur related-count stable-count))))))
 
 (defn- wait-for-frame-content!
   [driver source-cfg expected-title outer-url]
   (wait-until source-cfg #(frame-content-ready? driver expected-title))
   (when (direct-service-desk-article-url? outer-url)
-    (wait-until-for (or (:iframe_related_links_timeout_ms source-cfg)
-                       default-iframe-related-links-timeout-ms)
-                    (wait-interval-ms source-cfg)
-                    #(frame-related-links-ready? driver))))
+    (wait-for-related-links! driver source-cfg)))
 
 (defn- article-url?
   [url]
@@ -709,13 +762,21 @@
         restart-for-page-limit? (and (pos? restart-after-pages)
                                      (>= pages-in-session restart-after-pages))
         _ (when restart-for-page-limit?
-            (reset! driver (restart-driver! @driver source-cfg)))
+            (reset! driver (restart-driver! @driver source-cfg :page-limit)))
         pages-in-session (if restart-for-page-limit? 0 pages-in-session)
         page (render-page! @driver source-cfg url)
+        ;; A blank render is re-tried once in place, but the browser is NOT
+        ;; restarted: a blank here means the page's content never materialized
+        ;; (e.g. a JSM article whose body only renders under its other URL
+        ;; variant), which a fresh browser reproduces identically. Restarting
+        ;; just paid a full Chrome startup for nothing. The same article's
+        ;; sibling URL variant, or a later queue retry, supplies the content.
         blank-render? (blank-page? page)
         _ (when blank-render?
-            (reset! driver (restart-driver! @driver source-cfg)))
-        pages-in-session (if blank-render? 0 pages-in-session)
+            (u/log ::blank-render
+                   :source-id (:id source-cfg)
+                   :canonical-url (or (:canonical_url page) url)
+                   :requested-url url))
         page (if blank-render?
                (render-page! @driver source-cfg (or (:canonical_url page) url))
                page)
@@ -729,7 +790,7 @@
                                    (pos? restart-after-failures)
                                    (>= consecutive-failures restart-after-failures))
         _ (when restart-for-failures?
-            (reset! driver (restart-driver! @driver source-cfg)))
+            (reset! driver (restart-driver! @driver source-cfg :consecutive-failures)))
         pages-in-session (if restart-for-failures? 0 pages-in-session)
         consecutive-failures (if restart-for-failures? 0 consecutive-failures)]
     {:page page
@@ -748,6 +809,7 @@
         (loop [queue (into clojure.lang.PersistentQueue/EMPTY starts)
                queued (set starts)
                visited #{}
+               attempts {}
                pages []
                pages-in-session 0
                consecutive-failures 0]
@@ -757,7 +819,7 @@
             pages
 
             (contains? visited (peek queue))
-            (recur (pop queue) queued visited pages pages-in-session consecutive-failures)
+            (recur (pop queue) queued visited attempts pages pages-in-session consecutive-failures)
 
             :else
             (let [url (peek queue)
@@ -770,21 +832,30 @@
                   page (:page render-result)
                   pages-in-session (:pages-in-session render-result)
                   consecutive-failures (:consecutive-failures render-result)
-                  visited (conj visited url)
-                  canonical-url (:canonical_url page)
-                  visited (cond-> visited canonical-url (conj canonical-url))
-                  pages (conj pages page)
-                  page-count (count pages)
-                  _ (when (log-progress? source-cfg page-count)
-                      (u/log ::discovery-progress
-                             :source-id (:id source-cfg)
-                             :pages page-count
-                             :queue-size (count queue)
-                             :errors (count (filter source/anomaly? pages))))
-                  [queue queued] (if (source/anomaly? page)
-                                   [queue queued]
-                                   (enqueue-links source-cfg queue queued visited page))]
-              (recur queue queued visited pages pages-in-session consecutive-failures))))
+                  attempt (inc (get attempts url 0))]
+              (if (retry-render? source-cfg page attempt)
+                (do
+                  (u/log ::render-retry
+                         :source-id (:id source-cfg)
+                         :canonical-url url
+                         :attempt attempt)
+                  (recur (conj queue url) queued visited (assoc attempts url attempt)
+                         pages pages-in-session consecutive-failures))
+                (let [visited (conj visited url)
+                      canonical-url (:canonical_url page)
+                      visited (cond-> visited canonical-url (conj canonical-url))
+                      pages (conj pages page)
+                      page-count (count pages)
+                      _ (when (log-progress? source-cfg page-count)
+                          (u/log ::discovery-progress
+                                 :source-id (:id source-cfg)
+                                 :pages page-count
+                                 :queue-size (count queue)
+                                 :errors (count (filter source/anomaly? pages))))
+                      [queue queued] (if (source/anomaly? page)
+                                       [queue queued]
+                                       (enqueue-links source-cfg queue queued visited page))]
+                  (recur queue queued visited attempts pages pages-in-session consecutive-failures))))))
         (finally
           (safe-quit-driver! @driver))))))
 
@@ -793,6 +864,7 @@
   {:queue (into clojure.lang.PersistentQueue/EMPTY starts)
    :queued (set starts)
    :visited #{}
+   :attempts {}
    :pages []
    :active 0
    :done? false})
@@ -806,11 +878,16 @@
           done?
           nil
 
-          (>= (+ (count pages) active) max-pages)
+          (>= (count pages) max-pages)
           (do
             (swap! state assoc :done? true)
             (.notifyAll lock)
             nil)
+
+          (>= (+ (count pages) active) max-pages)
+          (do
+            (.wait lock)
+            (recur))
 
           (seq queue)
           (let [url (peek queue)]
@@ -835,36 +912,55 @@
             (.wait lock)
             (recur)))))))
 
+(defn- requeue-url!
+  [lock state source-cfg url attempt]
+  (u/log ::render-retry
+         :source-id (:id source-cfg)
+         :canonical-url url
+         :attempt attempt)
+  (swap! state #(-> %
+                    (update :queue conj url)
+                    (assoc-in [:attempts url] attempt)
+                    (update :active dec)))
+  (.notifyAll lock))
+
+(defn- record-page!
+  [lock state source-cfg url page]
+  (let [{:keys [queue queued visited pages]} @state
+        visited (conj visited url)
+        canonical-url (:canonical_url page)
+        visited (cond-> visited canonical-url (conj canonical-url))
+        pages (conj pages page)
+        page-count (count pages)
+        [queue queued] (if (or (source/anomaly? page)
+                               (>= page-count (max-pages source-cfg)))
+                         [queue queued]
+                         (enqueue-links source-cfg queue queued visited page))]
+    (swap! state assoc
+           :queue queue
+           :queued queued
+           :visited visited
+           :pages pages)
+    (swap! state update :active dec)
+    (when (or (>= page-count (max-pages source-cfg))
+              (and (empty? queue)
+                   (zero? (:active @state))))
+      (swap! state assoc :done? true))
+    (.notifyAll lock)
+    (when (log-progress? source-cfg page-count)
+      (u/log ::discovery-progress
+             :source-id (:id source-cfg)
+             :pages page-count
+             :queue-size (count queue)
+             :errors (count (filter source/anomaly? pages))))))
+
 (defn- complete-url!
   [lock state source-cfg url page]
   (locking lock
-    (let [{:keys [queue queued visited pages]} @state
-          visited (conj visited url)
-          canonical-url (:canonical_url page)
-          visited (cond-> visited canonical-url (conj canonical-url))
-          pages (conj pages page)
-          page-count (count pages)
-          [queue queued] (if (or (source/anomaly? page)
-                                 (>= page-count (max-pages source-cfg)))
-                           [queue queued]
-                           (enqueue-links source-cfg queue queued visited page))]
-      (swap! state assoc
-             :queue queue
-             :queued queued
-             :visited visited
-             :pages pages)
-      (swap! state update :active dec)
-      (when (or (>= page-count (max-pages source-cfg))
-                (and (empty? queue)
-                     (zero? (:active @state))))
-        (swap! state assoc :done? true))
-      (.notifyAll lock)
-      (when (log-progress? source-cfg page-count)
-        (u/log ::discovery-progress
-               :source-id (:id source-cfg)
-               :pages page-count
-               :queue-size (count queue)
-               :errors (count (filter source/anomaly? pages)))))))
+    (let [attempt (inc (get-in @state [:attempts url] 0))]
+      (if (retry-render? source-cfg page attempt)
+        (requeue-url! lock state source-cfg url attempt)
+        (record-page! lock state source-cfg url page)))))
 
 (defn- render-worker!
   [lock state source-cfg]
