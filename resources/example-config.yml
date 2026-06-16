@@ -74,6 +74,22 @@ indexes:
           - alida-vector-fixtures/docs/**/*.json
         exclude_globs:
           - alida-vector-fixtures/docs/private/**
+      - id: cloud-object-docs
+        type: gcs
+        bucket: alida-gcs-fixtures
+        project_id: alida-dev
+        prefix: fixtures/docs/
+        include_globs:
+          - fixtures/docs/*.html
+          - fixtures/docs/**/*.html
+          - fixtures/docs/*.md
+          - fixtures/docs/**/*.md
+          - fixtures/docs/*.txt
+          - fixtures/docs/**/*.txt
+          - fixtures/docs/*.json
+          - fixtures/docs/**/*.json
+        exclude_globs:
+          - fixtures/docs/private/**
       - id: support
         type: jira-service-management
         crawl_method: api

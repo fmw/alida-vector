@@ -5,6 +5,7 @@
             [alida.embed.openai]
             [alida.embed.vertex-ai]
             [alida.source.jira-service-management]
+            [alida.source.gcs]
             [alida.source.local]
             [alida.source.s3]
             [alida.source.webdriver]

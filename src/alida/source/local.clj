@@ -1,15 +1,8 @@
 (ns alida.source.local
   (:require [alida.source :as source]
+            [alida.source.object-storage :as object-storage]
             [clojure.java.io :as io]
             [clojure.string :as str]))
-
-(def extension-content-types
-  {"html" "text/html"
-   "htm" "text/html"
-   "txt" "text/plain"
-   "md" "text/markdown"
-   "markdown" "text/markdown"
-   "json" "application/json"})
 
 (def default-extensions
   #{"html" "htm"})
@@ -19,10 +12,6 @@
   (some-> (re-find #"\.([^.]+)$" (str path))
           second
           str/lower-case))
-
-(defn- content-type
-  [path]
-  (get extension-content-types (extension path) "application/octet-stream"))
 
 (defn- file-uri
   [^java.io.File file]
@@ -37,10 +26,16 @@
 (defn- root-files
   [source-cfg]
   (when-let [root (:root source-cfg)]
-    (let [extensions (set (or (:include_extensions source-cfg) default-extensions))]
+    (let [extensions (set (or (:include_extensions source-cfg) default-extensions))
+          root-file (.getCanonicalFile (io/file root))]
       (->> (file-seq (io/file root))
            (filter #(.isFile ^java.io.File %))
-           (filter #(contains? extensions (extension (.getPath ^java.io.File %))))))))
+           (filter #(contains? extensions (extension (.getPath ^java.io.File %))))
+           (filter (fn [file]
+                     (object-storage/object-included?
+                      source-cfg
+                      (str (.relativize (.toPath root-file)
+                                        (.toPath (.getCanonicalFile ^java.io.File file)))))))))))
 
 (defn- discover-file
   [source-cfg file]
@@ -50,7 +45,7 @@
        :source_type (:type source-cfg)
        :canonical_url (file-uri file)
        :path (.getPath file)
-       :content_type (content-type (.getPath file))}
+       :content_type (object-storage/content-type (.getPath file) nil)}
       (source/anomaly :cognitect.anomalies/not-found
                       {:type :alida.source.local/file-not-found
                        :source-id (:id source-cfg)
@@ -72,9 +67,14 @@
     discovered-item
     (let [file (io/file (:path discovered-item))]
       (if (.exists file)
-        (assoc discovered-item
-               :body (slurp file :encoding "UTF-8")
-               :title (or (:title discovered-item) (.getName file)))
+        (dissoc (object-storage/fetched-document
+                 source-cfg
+                 (assoc discovered-item :key (.getName file))
+                 {:body (slurp file :encoding "UTF-8")
+                  :content_type (:content_type discovered-item)}
+                 {:body-fn :body
+                  :content-type-fn :content_type})
+                :key)
         (source/anomaly :cognitect.anomalies/not-found
                         {:type :alida.source.local/file-not-found
                          :source-id (:id source-cfg)

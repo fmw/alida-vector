@@ -27,6 +27,18 @@
    [:fallback {:optional true} :string]
    [:html_selectors {:optional true} [:sequential :string]]])
 
+(def JsonExtract
+  [:map {:closed true}
+   [:mode {:optional true} [:enum "all" "html-fields"]]
+   [:field_type_key {:optional true} :string]
+   [:field_type_value {:optional true} :string]
+   [:html_field {:optional true} :string]
+   [:title_path {:optional true} [:sequential [:or :string :int]]]
+   [:locale_from_filename {:optional true}
+    [:map {:closed true}
+     [:pattern :string]
+     [:mappings [:map-of [:or :string :keyword] :string]]]]])
+
 (def Embedding
   [:map
    [:provider [:enum "openai" "azure-openai" "vertex-ai" "noop"]]
@@ -58,6 +70,7 @@
    [:language {:optional true} SourceLanguage]
    [:remove_selectors {:optional true} [:sequential :string]]
    [:strip_text {:optional true} [:sequential :string]]
+   [:json_extract {:optional true} JsonExtract]
    [:dedupe_content {:optional true} :boolean]
    [:dedupe_prefer_url_substrings {:optional true} [:sequential :string]]
    [:max_pages {:optional true} :int]
@@ -129,17 +142,29 @@
                  [[:path {:optional true} :string]
                   [:paths {:optional true} [:sequential :string]]
                   [:root {:optional true} :string]
-                  [:include_extensions {:optional true} [:sequential :string]]]))
-
-(def ObjectStorageSource
-  (source-schema ["s3" "gcs"]
-                 common-source-entries
-                 [[:bucket {:optional true} :string]
-                  [:prefix {:optional true} :string]
-                  [:region {:optional true} :string]
-                  [:project_id {:optional true} :string]
+                  [:include_extensions {:optional true} [:sequential :string]]
                   [:include_globs {:optional true} [:sequential :string]]
                   [:exclude_globs {:optional true} [:sequential :string]]]))
+
+(def ^:private object-storage-entries
+  [[:bucket {:optional true} :string]
+   [:prefix {:optional true} :string]
+   [:include_globs {:optional true} [:sequential :string]]
+   [:exclude_globs {:optional true} [:sequential :string]]])
+
+(def S3Source
+  (source-schema ["s3"]
+                 common-source-entries
+                 object-storage-entries
+                 [[:region {:optional true} :string]]))
+
+(def GcsSource
+  (source-schema ["gcs"]
+                 common-source-entries
+                 object-storage-entries
+                 [[:project_id {:optional true} :string]
+                  [:credentials_path {:optional true} :string]
+                  [:access_token {:optional true} :string]]))
 
 (def Source
   [:multi {:dispatch :type}
@@ -147,8 +172,8 @@
    ["jira-service-management" JiraServiceManagementSource]
    ["webdriver" WebdriverSource]
    ["local" LocalSource]
-   ["s3" ObjectStorageSource]
-   ["gcs" ObjectStorageSource]])
+   ["s3" S3Source]
+   ["gcs" GcsSource]])
 
 (def Verification
   [:map
