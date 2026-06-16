@@ -33,6 +33,9 @@ Common environment variables:
 - `GOOGLE_APPLICATION_CREDENTIALS`
 - `ALIDA_SLACK_WEBHOOK_URL`
 
+For file-source credential details, including S3 IAM roles and GCS service
+accounts, see [File Sources](file-sources.md).
+
 Container-specific environment variables:
 
 - `ALIDA_VECTOR_JAR`: path to the jar used by the wrapper. Defaults to `/opt/alida-vector/alida-vector.jar` in the image.
