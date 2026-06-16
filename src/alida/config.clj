@@ -290,6 +290,10 @@
                           (when-not (source-has-any? source [:path :paths :root])
                             "path, paths, or root")
 
+                          "s3"
+                          (when-not (source-has-any? source [:bucket])
+                            "bucket")
+
                           nil)]
           :when missing]
     (throw (ex-info (str "Invalid source config for index " (:name index)
