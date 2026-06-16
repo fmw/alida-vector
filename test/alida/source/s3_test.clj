@@ -91,8 +91,39 @@
                      requests)]
     (is (= ["docs/a.md"]
            (mapv :key (source/discover sys (assoc source-cfg
-                                                  :include_globs ["docs/*.md" "docs/**/*.md"]
+                                                  :include_globs ["docs/**/*.md"]
                                                   :exclude_globs ["docs/private/**"])))))))
+
+(deftest recursive-globs-include-direct-and-nested-children
+  (let [requests (atom [])
+        sys (fake-s3 {[:ListObjectsV2 {:Bucket "alida-fixtures"
+                                       :Prefix "docs/"
+                                       :MaxKeys 1000}]
+                      {:Contents [{:Key "docs/a.md"}
+                                  {:Key "docs/nested/b.md"}
+                                  {:Key "docs/c.txt"}]
+                       :IsTruncated false}}
+                     requests)]
+    (is (= ["docs/a.md" "docs/nested/b.md"]
+           (mapv :key (source/discover sys (assoc source-cfg
+                                                  :include_globs ["docs/**/*.md"])))))))
+
+(deftest recursive-globs-handle-multiple-recursive-segments
+  (let [requests (atom [])
+        sys (fake-s3 {[:ListObjectsV2 {:Bucket "alida-fixtures"
+                                       :Prefix "content/"
+                                       :MaxKeys 1000}]
+                      {:Contents [{:Key "content/exports/en/a.json"}
+                                  {:Key "content/site/exports/a.json"}
+                                  {:Key "content/site/exports/private/secret.json"}
+                                  {:Key "content/other/a.json"}]
+                       :IsTruncated false}}
+                     requests)]
+    (is (= ["content/exports/en/a.json" "content/site/exports/a.json"]
+           (mapv :key (source/discover sys (assoc source-cfg
+                                                  :prefix "content/"
+                                                  :include_globs ["content/**/exports/**/*.json"]
+                                                  :exclude_globs ["content/**/exports/private/**/*.json"])))))))
 
 (deftest fetches-s3-object-content
   (let [requests (atom [])
