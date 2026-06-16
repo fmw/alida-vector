@@ -172,3 +172,6 @@ filename convention; use `language.mode: html` to prefer that metadata.
 Manual crawl configs often contain local paths, bucket names, credentials paths,
 or test database URLs. Keep those files under the ignored `config/` directory
 and commit only generic examples.
+
+For a complete real-bucket validation lifecycle, see
+[Manual Fixture Verification](manual-fixtures.md).
