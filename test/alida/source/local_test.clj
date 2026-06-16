@@ -90,6 +90,31 @@
         (.delete private-dir)
         (.delete (.toFile dir))))))
 
+(deftest recursive-globs-include-direct-and-nested-local-files
+  (let [dir (java.nio.file.Files/createTempDirectory "alida-source-local-root" (make-array java.nio.file.attribute.FileAttribute 0))
+        public-dir (doto (io/file (.toFile dir) "public") .mkdir)
+        nested-dir (doto (io/file public-dir "nested") .mkdir)
+        direct (doto (io/file public-dir "guide.json") (spit "{}"))
+        nested (doto (io/file nested-dir "guide.json") (spit "{}"))
+        ignored (doto (io/file public-dir "notes.txt") (spit "Notes"))]
+    (try
+      (let [items (source/discover {} {:id "fixtures"
+                                       :type "local"
+                                       :root (str dir)
+                                       :include_extensions ["json" "txt"]
+                                       :include_globs ["public/**/*.json"]})]
+        (is (= #{(.getCanonicalPath direct)
+                 (.getCanonicalPath nested)}
+               (set (map :path items))))
+        (is (not-any? #(= (.getCanonicalPath ignored) (:path %)) items)))
+      (finally
+        (.delete direct)
+        (.delete nested)
+        (.delete ignored)
+        (.delete nested-dir)
+        (.delete public-dir)
+        (.delete (.toFile dir))))))
+
 (deftest fetches-local-files-as-utf-8
   (let [file (temp-file ".html" "<p>Résumé</p>")]
     (try

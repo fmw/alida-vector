@@ -35,8 +35,7 @@
                     :type "gcs"
                     :bucket "alida-gcs-fixtures"
                     :prefix "fixtures/docs/"
-                    :include_globs ["fixtures/docs/*.json"
-                                    "fixtures/docs/**/*.json"]
+                    :include_globs ["fixtures/docs/**/*.json"]
                     :exclude_globs ["fixtures/docs/private/**"]}
         sys (fake-gcs {{:bucket "alida-gcs-fixtures"
                         :prefix "fixtures/docs/"

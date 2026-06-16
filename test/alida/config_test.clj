@@ -830,7 +830,7 @@ indexes:
         project_id: alida-dev
         credentials_path: config/alida-gcs-fixture-service-account.json
         prefix: fixtures/docs/
-        include_globs: [fixtures/docs/*.json, fixtures/docs/**/*.json]
+        include_globs: [fixtures/docs/**/*.json]
         exclude_globs: [fixtures/docs/private/**]
         language:
           mode: html
@@ -877,7 +877,7 @@ indexes:
         (is (= "alida-dev" (-> sources (nth 4) :project_id)))
         (is (= "config/alida-gcs-fixture-service-account.json" (-> sources (nth 4) :credentials_path)))
         (is (= "fixtures/docs/" (-> sources (nth 4) :prefix)))
-        (is (= ["fixtures/docs/*.json" "fixtures/docs/**/*.json"] (-> sources (nth 4) :include_globs)))
+        (is (= ["fixtures/docs/**/*.json"] (-> sources (nth 4) :include_globs)))
         (is (= ["fixtures/docs/private/**"] (-> sources (nth 4) :exclude_globs)))
         (is (= "html-fields" (-> sources (nth 4) :json_extract :mode)))
         (is (= ["title"] (-> sources (nth 4) :json_extract :title_path))))

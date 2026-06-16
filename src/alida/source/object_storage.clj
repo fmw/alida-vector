@@ -147,9 +147,26 @@
   [glob]
   (.getPathMatcher (FileSystems/getDefault) (str "glob:" glob)))
 
+(defn- glob-variants
+  [glob]
+  (let [parts (str/split glob #"\*\*/" -1)]
+    (if (= 1 (count parts))
+      [glob]
+      (->> (rest parts)
+           (reduce (fn [prefixes part]
+                     (mapcat (fn [prefix]
+                               [(str prefix "**/" part)
+                                (str prefix part)])
+                             prefixes))
+                   [(first parts)])
+           distinct
+           vec))))
+
 (defn glob-matches?
   [glob key]
-  (.matches (path-matcher glob) (Paths/get key (make-array String 0))))
+  (let [path (Paths/get key (make-array String 0))]
+    (some #(when (.matches (path-matcher %) path) true)
+          (glob-variants glob))))
 
 (defn object-included?
   [source-cfg key]
