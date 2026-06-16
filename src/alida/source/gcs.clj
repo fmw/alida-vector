@@ -3,7 +3,7 @@
             [alida.source.object-storage :as object-storage]
             [clojure.java.io :as io])
   (:import [com.google.auth.oauth2 AccessToken GoogleCredentials]
-           [com.google.cloud.storage Blob BlobId Storage Storage$BlobListOption StorageException StorageOptions]
+           [com.google.cloud.storage Blob Blob$BlobSourceOption BlobId Storage Storage$BlobListOption StorageException StorageOptions]
            [java.util Date]))
 
 (defn- access-token-credentials
@@ -130,7 +130,7 @@
   [^Storage client bucket key]
   (try
     (if-let [blob (.get client (BlobId/of bucket key))]
-      {:body (.getContent blob)
+      {:body (.getContent blob (make-array Blob$BlobSourceOption 0))
        :content_type (.getContentType blob)}
       {:cognitect.anomalies/category :cognitect.anomalies/not-found
        :message (str "GCS object not found: gs://" bucket "/" key)
