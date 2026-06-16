@@ -58,6 +58,22 @@ indexes:
           html_selectors:
             - html[lang]
             - meta[property=og:locale]
+      - id: object-docs
+        type: s3
+        bucket: alida-vector-fixtures
+        region: us-east-1
+        prefix: alida-vector-fixtures/docs/
+        include_globs:
+          - alida-vector-fixtures/docs/*.html
+          - alida-vector-fixtures/docs/**/*.html
+          - alida-vector-fixtures/docs/*.md
+          - alida-vector-fixtures/docs/**/*.md
+          - alida-vector-fixtures/docs/*.txt
+          - alida-vector-fixtures/docs/**/*.txt
+          - alida-vector-fixtures/docs/*.json
+          - alida-vector-fixtures/docs/**/*.json
+        exclude_globs:
+          - alida-vector-fixtures/docs/private/**
       - id: support
         type: jira-service-management
         crawl_method: api

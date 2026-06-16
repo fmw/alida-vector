@@ -1,0 +1,95 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+usage() {
+  cat <<'EOF'
+Usage: bin/sync-s3-fixtures BUCKET [REGION] [PREFIX]
+
+Creates BUCKET if it does not already exist, checks list/write/delete access,
+then syncs dev-fixtures/s3/content into s3://BUCKET/PREFIX.
+
+REGION defaults to AWS_REGION, AWS_DEFAULT_REGION, or us-east-1.
+PREFIX defaults to alida-vector-fixtures/.
+EOF
+}
+
+if [[ "${1:-}" == "-h" || "${1:-}" == "--help" || $# -lt 1 ]]; then
+  usage
+  exit 0
+fi
+
+bucket="$1"
+region="${2:-${AWS_REGION:-${AWS_DEFAULT_REGION:-us-east-1}}}"
+prefix="${3:-alida-vector-fixtures/}"
+repo_root="$(cd "$(dirname "$0")/.." && pwd)"
+fixture_dir="$repo_root/dev-fixtures/s3/content"
+
+if ! command -v aws >/dev/null 2>&1; then
+  echo "aws CLI is required" >&2
+  exit 1
+fi
+
+if [[ ! -d "$fixture_dir" ]]; then
+  echo "Fixture directory not found: $fixture_dir" >&2
+  exit 1
+fi
+
+prefix="${prefix#/}"
+[[ "$prefix" == */ ]] || prefix="$prefix/"
+
+echo "Using bucket: $bucket"
+echo "Using region: $region"
+echo "Using prefix: $prefix"
+
+if aws s3api head-bucket --bucket "$bucket" >/dev/null 2>&1; then
+  echo "Bucket exists and is accessible; skipping creation."
+else
+  echo "Bucket does not exist or is not accessible; creating it."
+  if [[ "$region" == "us-east-1" ]]; then
+    aws s3api create-bucket --bucket "$bucket" --region "$region" >/dev/null
+  else
+    aws s3api create-bucket \
+      --bucket "$bucket" \
+      --region "$region" \
+      --create-bucket-configuration "LocationConstraint=$region" >/dev/null
+  fi
+  aws s3api wait bucket-exists --bucket "$bucket"
+fi
+
+echo "Checking bucket permissions."
+aws s3api head-bucket --bucket "$bucket" >/dev/null
+aws s3api list-objects-v2 --bucket "$bucket" --prefix "$prefix" --max-keys 1 >/dev/null
+
+check_key="${prefix}.alida-vector-permission-check-$(date +%s)-$$"
+tmp_file="$(mktemp)"
+trap 'rm -f "$tmp_file"' EXIT
+printf 'alida-vector permission check\n' > "$tmp_file"
+
+aws s3api put-object --bucket "$bucket" --key "$check_key" --body "$tmp_file" >/dev/null
+aws s3api head-object --bucket "$bucket" --key "$check_key" >/dev/null
+aws s3api delete-object --bucket "$bucket" --key "$check_key" >/dev/null
+
+echo "Syncing fixtures to s3://$bucket/$prefix"
+aws s3 sync "$fixture_dir/" "s3://$bucket/$prefix" --delete
+
+cat <<EOF
+Done.
+
+Manual crawl setup:
+
+  export ALIDA_S3_FIXTURE_BUCKET=$bucket
+  export ALIDA_S3_FIXTURE_REGION=$region
+  export ALIDA_S3_FIXTURE_PREFIX=$prefix
+  export ALIDA_S3_FIXTURE_DATABASE_URL=jdbc:postgresql://127.0.0.1:55432/alida
+  export ALIDA_S3_FIXTURE_DATABASE_USER=fmw
+  export ALIDA_S3_FIXTURE_DATABASE_PASSWORD=
+
+If your AWS CLI session comes from AWS SSO or 'aws login', also run:
+
+  eval "\$(aws configure export-credentials --format env)"
+
+Then verify the crawl with:
+
+  clojure -M -m alida.main migrate --config config/alida-s3-fixture.yml
+  clojure -M -m alida.main crawl --config config/alida-s3-fixture.yml --index s3-fixtures
+EOF
