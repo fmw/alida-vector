@@ -290,7 +290,7 @@
                           (when-not (source-has-any? source [:path :paths :root])
                             "path, paths, or root")
 
-                          "s3"
+                          ("s3" "gcs")
                           (when-not (source-has-any? source [:bucket])
                             "bucket")
 
