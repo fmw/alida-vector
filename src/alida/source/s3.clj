@@ -1,7 +1,6 @@
 (ns alida.source.s3
   (:require [alida.source :as source]
             [alida.source.object-storage :as object-storage]
-            [clojure.string :as str]
             [cognitect.aws.client.api :as aws]))
 
 (defn- s3-client
@@ -18,67 +17,17 @@
     (f client request)
     (aws/invoke client request)))
 
-(defn- aws-anomaly?
-  [value]
-  (and (map? value)
-       (contains? value :cognitect.anomalies/category)))
-
-(defn- sanitize-aws-anomaly
-  [result]
-  (object-storage/json-safe-value result))
-
-(defn- throw-aws-anomaly!
-  [source-cfg op result]
-  (when (aws-anomaly? result)
-    (throw (ex-info (str "S3 " (name op) " failed")
-                    (assoc (sanitize-aws-anomaly result)
-                           :type :alida.source.s3/request-failed
-                           :source-id (:id source-cfg)
-                           :operation op)))))
-
-(defn- fetch-anomaly
-  [source-cfg op item result]
-  (source/anomaly (or (:cognitect.anomalies/category result)
-                      :cognitect.anomalies/fault)
-                  (assoc (sanitize-aws-anomaly result)
-                         :type :alida.source.s3/fetch-failed
-                         :source-id (:id source-cfg)
-                         :operation op
-                         :canonical-url (:canonical_url item)
-                         :bucket (:bucket item)
-                         :key (:key item))))
-
-(defn- canonical-url
-  [bucket key]
-  (object-storage/canonical-url "s3" bucket key))
-
-(defn- object-item
-  [source-cfg object]
-  (let [bucket (:bucket source-cfg)
-        key (:Key object)]
-    {:source_id (:id source-cfg)
-     :source_type (:type source-cfg)
-     :canonical_url (canonical-url bucket key)
-     :bucket bucket
-     :key key
-     :content_type (object-storage/content-type key nil)
-     :size (:Size object)
-     :etag (:ETag object)
-     :last_modified (:LastModified object)}))
-
 (defn- page-objects
   [source-cfg response]
-  (->> (:Contents response)
-       (keep (fn [object]
-               (let [key (:Key object)]
-                 (when (and (seq key)
-                            (not (str/ends-with? key "/"))
-                            (object-storage/object-included? source-cfg key))
-                   (object-item source-cfg object)))))))
-
-(defn- max-pages
-  [source-cfg]
-  (or (:max_pages source-cfg) object-storage/default-max-pages))
+  (object-storage/page-objects source-cfg
+                               "s3"
+                               (:Contents response)
+                               :Key
+                               (fn [object key]
+                                 {:content_type (object-storage/content-type key nil)
+                                  :size (:Size object)
+                                  :etag (:ETag object)
+                                  :last_modified (:LastModified object)})))
 
 (defn- list-request
   [source-cfg continuation-token remaining]
@@ -90,22 +39,17 @@
 
 (defn- discover*
   [sys source-cfg client]
-  (loop [items []
-         continuation-token nil]
-    (let [remaining (- (max-pages source-cfg) (count items))]
-      (if (not (pos? remaining))
-        items
-        (let [request (list-request source-cfg continuation-token remaining)
-              response (invoke! sys client request)
-              _ (throw-aws-anomaly! source-cfg (:op request) response)
-              page-items (vec (take remaining (page-objects source-cfg response)))
-              items (into items page-items)
-              next-token (:NextContinuationToken response)]
-          (if (and (:IsTruncated response)
-                   (seq next-token)
-                   (< (count items) (max-pages source-cfg)))
-            (recur items next-token)
-            items))))))
+  (object-storage/discover-paged
+   source-cfg
+   {:op :ListObjectsV2
+    :service-label "S3"
+    :request-error-type :alida.source.s3/request-failed
+    :list-page (fn [continuation-token remaining]
+                 (invoke! sys client (list-request source-cfg continuation-token remaining)))
+    :page-objects #(page-objects source-cfg %)
+    :next-token :NextContinuationToken
+    :continue? (fn [response next-token]
+                 (and (:IsTruncated response) (seq next-token)))}))
 
 (defmethod source/discover :s3
   [sys source-cfg]
@@ -124,9 +68,11 @@
                    :request {:Bucket (:bucket discovered-item)
                              :Key (:key discovered-item)}}
           response (invoke! sys client request)]
-      (if (aws-anomaly? response)
-        (fetch-anomaly source-cfg (:op request) discovered-item response)
-        (assoc discovered-item
-               :body (object-storage/body-string (:Body response))
-               :content_type (object-storage/content-type (:key discovered-item) (:ContentType response))
-               :title (or (:title discovered-item) (:key discovered-item)))))))
+      (object-storage/fetched-document
+       source-cfg
+       discovered-item
+       response
+       {:op (:op request)
+        :fetch-error-type :alida.source.s3/fetch-failed
+        :body-fn :Body
+        :content-type-fn :ContentType}))))

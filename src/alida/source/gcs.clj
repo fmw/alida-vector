@@ -1,8 +1,29 @@
 (ns alida.source.gcs
   (:require [alida.source :as source]
             [alida.source.object-storage :as object-storage]
-            [clojure.string :as str])
-  (:import [com.google.cloud.storage Blob BlobId Storage Storage$BlobListOption StorageException StorageOptions]))
+            [clojure.java.io :as io])
+  (:import [com.google.auth.oauth2 AccessToken GoogleCredentials]
+           [com.google.cloud.storage Blob BlobId Storage Storage$BlobListOption StorageException StorageOptions]
+           [java.util Date]))
+
+(defn- access-token-credentials
+  [token]
+  (GoogleCredentials/create
+   (AccessToken. token (Date. (+ (System/currentTimeMillis) 3600000)))))
+
+(defn- file-credentials
+  [path]
+  (with-open [in (io/input-stream path)]
+    (GoogleCredentials/fromStream in)))
+
+(defn- configured-credentials
+  [source-cfg]
+  (cond
+    (:access_token source-cfg)
+    (access-token-credentials (:access_token source-cfg))
+
+    (:credentials_path source-cfg)
+    (file-credentials (:credentials_path source-cfg))))
 
 (defn- gcs-client
   [sys source-cfg]
@@ -13,16 +34,9 @@
       (let [builder (StorageOptions/newBuilder)]
         (when-let [project-id (:project_id source-cfg)]
           (.setProjectId builder project-id))
+        (when-let [credentials (configured-credentials source-cfg)]
+          (.setCredentials builder credentials))
         (.getService (.build builder)))))
-
-(defn- gcs-anomaly?
-  [value]
-  (and (map? value)
-       (contains? value :cognitect.anomalies/category)))
-
-(defn- sanitize-gcs-anomaly
-  [result]
-  (object-storage/json-safe-value result))
 
 (defn- exception-anomaly
   [category e details]
@@ -39,57 +53,16 @@
                      e
                      (assoc details :status (.getCode e))))
 
-(defn- throw-gcs-anomaly!
-  [source-cfg op result]
-  (when (gcs-anomaly? result)
-    (throw (ex-info (str "GCS " (name op) " failed")
-                    (assoc (sanitize-gcs-anomaly result)
-                           :type :alida.source.gcs/request-failed
-                           :source-id (:id source-cfg)
-                           :operation op)))))
-
-(defn- fetch-anomaly
-  [source-cfg op item result]
-  (source/anomaly (or (:cognitect.anomalies/category result)
-                      :cognitect.anomalies/fault)
-                  (assoc (sanitize-gcs-anomaly result)
-                         :type :alida.source.gcs/fetch-failed
-                         :source-id (:id source-cfg)
-                         :operation op
-                         :canonical-url (:canonical_url item)
-                         :bucket (:bucket item)
-                         :key (:key item))))
-
-(defn- canonical-url
-  [bucket key]
-  (object-storage/canonical-url "gs" bucket key))
-
-(defn- object-item
-  [source-cfg object]
-  (let [bucket (:bucket source-cfg)
-        key (:name object)]
-    {:source_id (:id source-cfg)
-     :source_type (:type source-cfg)
-     :canonical_url (canonical-url bucket key)
-     :bucket bucket
-     :key key
-     :content_type (object-storage/content-type key (:content_type object))
-     :size (:size object)
-     :etag (:etag object)}))
-
 (defn- page-objects
   [source-cfg response]
-  (->> (:items response)
-       (keep (fn [object]
-               (let [key (:name object)]
-                 (when (and (seq key)
-                            (not (str/ends-with? key "/"))
-                            (object-storage/object-included? source-cfg key))
-                   (object-item source-cfg object)))))))
-
-(defn- max-pages
-  [source-cfg]
-  (or (:max_pages source-cfg) object-storage/default-max-pages))
+  (object-storage/page-objects source-cfg
+                               "gs"
+                               (:items response)
+                               :name
+                               (fn [object key]
+                                 {:content_type (object-storage/content-type key (:content_type object))
+                                  :size (:size object)
+                                  :etag (:etag object)})))
 
 (defn- iterable->vec
   [values]
@@ -133,20 +106,17 @@
 
 (defn- discover*
   [sys source-cfg client]
-  (loop [items []
-         page-token nil]
-    (let [remaining (- (max-pages source-cfg) (count items))]
-      (if (not (pos? remaining))
-        items
-        (let [response (list-page! sys client source-cfg page-token remaining)
-              _ (throw-gcs-anomaly! source-cfg :list response)
-              page-items (vec (take remaining (page-objects source-cfg response)))
-              items (into items page-items)
-              next-token (:next_page_token response)]
-          (if (and (seq next-token)
-                   (< (count items) (max-pages source-cfg)))
-            (recur items next-token)
-            items))))))
+  (object-storage/discover-paged
+   source-cfg
+   {:op :list
+    :service-label "GCS"
+    :request-error-type :alida.source.gcs/request-failed
+    :list-page (fn [page-token remaining]
+                 (list-page! sys client source-cfg page-token remaining))
+    :page-objects #(page-objects source-cfg %)
+    :next-token :next_page_token
+    :continue? (fn [_response next-token]
+                 (seq next-token))}))
 
 (defmethod source/discover :gcs
   [sys source-cfg]
@@ -185,9 +155,11 @@
     discovered-item
     (let [client (gcs-client sys source-cfg)
           response (fetch-object! sys client discovered-item)]
-      (if (gcs-anomaly? response)
-        (fetch-anomaly source-cfg :fetch discovered-item response)
-        (assoc discovered-item
-               :body (object-storage/body-string (:body response))
-               :content_type (object-storage/content-type (:key discovered-item) (:content_type response))
-               :title (or (:title discovered-item) (:key discovered-item)))))))
+      (object-storage/fetched-document
+       source-cfg
+       discovered-item
+       response
+       {:op :fetch
+        :fetch-error-type :alida.source.gcs/fetch-failed
+        :body-fn :body
+        :content-type-fn :content_type}))))

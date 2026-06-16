@@ -782,6 +782,8 @@ indexes:
         type: local
         root: test/fixtures
         include_extensions: [html, md]
+        include_globs: [public/*.html]
+        exclude_globs: [private/**]
       - id: website
         type: website
         sitemap_url: https://example.test/sitemap.xml
@@ -826,9 +828,22 @@ indexes:
         type: gcs
         bucket: alida-gcs-fixtures
         project_id: alida-dev
+        access_token: test-token
         prefix: fixtures/docs/
         include_globs: [fixtures/docs/*.json, fixtures/docs/**/*.json]
         exclude_globs: [fixtures/docs/private/**]
+        language:
+          mode: html
+        json_extract:
+          mode: html-fields
+          field_type_key: type
+          field_type_value: content_text
+          html_field: content
+          title_path: [title]
+          locale_from_filename:
+            pattern: \"^([A-Z]{2})-\"
+            mappings:
+              EN: en_US
 ")
       (let [index (-> (config/load-config (.getPath file)) :indexes first)
             sources (:sources index)]
@@ -836,6 +851,8 @@ indexes:
         (is (= 250 (-> index :embedding :inter_batch_delay_ms)))
         (is (= ["local" "website" "jira-service-management" "s3" "gcs"] (mapv :type sources)))
         (is (= ["html" "md"] (-> sources first :include_extensions)))
+        (is (= ["public/*.html"] (-> sources first :include_globs)))
+        (is (= ["private/**"] (-> sources first :exclude_globs)))
         (is (= ["https://example.test/docs/"] (-> sources second :allowed_url_prefixes)))
         (is (= ["https://example.test/docs/secret"] (-> sources second :denied_urls)))
         (is (true? (-> sources second :dedupe_content)))
@@ -858,9 +875,12 @@ indexes:
         (is (= ["docs/private/**"] (-> sources (nth 3) :exclude_globs)))
         (is (= "alida-gcs-fixtures" (-> sources (nth 4) :bucket)))
         (is (= "alida-dev" (-> sources (nth 4) :project_id)))
+        (is (= "test-token" (-> sources (nth 4) :access_token)))
         (is (= "fixtures/docs/" (-> sources (nth 4) :prefix)))
         (is (= ["fixtures/docs/*.json" "fixtures/docs/**/*.json"] (-> sources (nth 4) :include_globs)))
-        (is (= ["fixtures/docs/private/**"] (-> sources (nth 4) :exclude_globs))))
+        (is (= ["fixtures/docs/private/**"] (-> sources (nth 4) :exclude_globs)))
+        (is (= "html-fields" (-> sources (nth 4) :json_extract :mode)))
+        (is (= ["title"] (-> sources (nth 4) :json_extract :title_path))))
       (finally
         (.delete file)))))
 

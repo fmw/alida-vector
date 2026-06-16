@@ -9,14 +9,27 @@ directory you want to compare.
 
 ## Authentication
 
-Use both CLI auth for bucket setup and Application Default Credentials for the
-JVM process:
+Use CLI auth for bucket setup:
 
 ```bash
 gcloud auth login
-gcloud auth application-default login
 gcloud config get-value project
 ```
+
+For the JVM crawl process, either use Application Default Credentials:
+
+```bash
+gcloud auth application-default login
+```
+
+or export a short-lived access token and reference it from your ignored config
+with `access_token: ${ALIDA_GCS_FIXTURE_ACCESS_TOKEN}`:
+
+```bash
+export ALIDA_GCS_FIXTURE_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+```
+
+A service account JSON file is also supported with `credentials_path`.
 
 ## Bucket Setup
 
@@ -74,6 +87,7 @@ export ALIDA_GCS_FIXTURE_PREFIX=fixtures/docs/
 export ALIDA_GCS_FIXTURE_DATABASE_URL=jdbc:postgresql://127.0.0.1:55432/alida
 export ALIDA_GCS_FIXTURE_DATABASE_USER=fmw
 export ALIDA_GCS_FIXTURE_DATABASE_PASSWORD=
+export ALIDA_GCS_FIXTURE_ACCESS_TOKEN="$(gcloud auth print-access-token)"
 ```
 
 Then run:

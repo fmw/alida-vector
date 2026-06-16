@@ -64,6 +64,32 @@
         (.delete text)
         (.delete (.toFile dir))))))
 
+(deftest root-files-support-shared-glob-filters
+  (let [dir (java.nio.file.Files/createTempDirectory "alida-source-local-root" (make-array java.nio.file.attribute.FileAttribute 0))
+        public-dir (doto (io/file (.toFile dir) "public") .mkdir)
+        private-dir (doto (io/file (.toFile dir) "private") .mkdir)
+        included (doto (io/file public-dir "guide.json") (spit "{}"))
+        excluded (doto (io/file private-dir "secret.json") (spit "{}"))
+        ignored (doto (io/file (.toFile dir) "notes.txt") (spit "Notes"))]
+    (try
+      (let [items (source/discover {} {:id "fixtures"
+                                       :type "local"
+                                       :root (str dir)
+                                       :include_extensions ["json" "txt"]
+                                       :include_globs ["public/*.json"]
+                                       :exclude_globs ["private/**"]})]
+        (is (= #{(.getCanonicalPath included)}
+               (set (map :path items))))
+        (is (not-any? #(= (.getCanonicalPath excluded) (:path %)) items))
+        (is (not-any? #(= (.getCanonicalPath ignored) (:path %)) items)))
+      (finally
+        (.delete included)
+        (.delete excluded)
+        (.delete ignored)
+        (.delete public-dir)
+        (.delete private-dir)
+        (.delete (.toFile dir))))))
+
 (deftest fetches-local-files-as-utf-8
   (let [file (temp-file ".html" "<p>Résumé</p>")]
     (try

@@ -1,5 +1,6 @@
 (ns alida.extract.text-test
   (:require [alida.extract.text :as extract-text]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is]]))
 
 (deftest extracts-plain-text-paragraphs
@@ -41,6 +42,32 @@
            (mapv :text (:blocks document))))
     (is (= [["sections"] ["sections" "0"] ["sections" "0"]]
            (mapv :heading_path (rest (:blocks document)))))))
+
+(deftest extracts-configured-json-html-fields
+  (let [document (extract-text/extract
+                  {:json_extract {:mode "html-fields"
+                                  :field_type_key "type"
+                                  :field_type_value "content_text"
+                                  :html_field "content"
+                                  :title_path ["title"]
+                                  :locale_from_filename {:pattern "^([A-Z]{2})-"
+                                                         :mappings {:EN "en_US"}}}}
+                  {:canonical_url "gs://fixtures/courses/EN-guide.json"
+                   :title "courses/EN-guide.json"
+                   :content_type "application/json"
+                   :body (str "{\"title\":\"Guide\",\"sections\":["
+                              "{\"content\":{\"type\":\"content_text\","
+                              "\"content\":\"<h1>Intro</h1><p>Hello <strong>world</strong>.</p>\"}},"
+                              "{\"content\":{\"type\":\"gallery\","
+                              "\"content\":\"<p>Ignored gallery text.</p>\"}},"
+                              "{\"content\":{\"type\":\"content_text\","
+                              "\"content\":\"<p>Second section.</p>\"}}]}")})]
+    (is (= "Guide" (:title document)))
+    (is (= "en_US" (:html_locale document)))
+    (is (= ["Intro" "Hello world." "Second section."]
+           (mapv :text (:blocks document))))
+    (is (not (str/includes? (:normalized_content document) "<strong>")))
+    (is (not (str/includes? (:normalized_content document) "Ignored gallery text")))))
 
 (deftest preserves-json-key-text
   (let [document (extract-text/extract
