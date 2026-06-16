@@ -828,7 +828,7 @@ indexes:
         type: gcs
         bucket: alida-gcs-fixtures
         project_id: alida-dev
-        access_token: test-token
+        credentials_path: config/alida-gcs-fixture-service-account.json
         prefix: fixtures/docs/
         include_globs: [fixtures/docs/*.json, fixtures/docs/**/*.json]
         exclude_globs: [fixtures/docs/private/**]
@@ -875,7 +875,7 @@ indexes:
         (is (= ["docs/private/**"] (-> sources (nth 3) :exclude_globs)))
         (is (= "alida-gcs-fixtures" (-> sources (nth 4) :bucket)))
         (is (= "alida-dev" (-> sources (nth 4) :project_id)))
-        (is (= "test-token" (-> sources (nth 4) :access_token)))
+        (is (= "config/alida-gcs-fixture-service-account.json" (-> sources (nth 4) :credentials_path)))
         (is (= "fixtures/docs/" (-> sources (nth 4) :prefix)))
         (is (= ["fixtures/docs/*.json" "fixtures/docs/**/*.json"] (-> sources (nth 4) :include_globs)))
         (is (= ["fixtures/docs/private/**"] (-> sources (nth 4) :exclude_globs)))

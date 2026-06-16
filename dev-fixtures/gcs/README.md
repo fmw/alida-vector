@@ -16,20 +16,36 @@ gcloud auth login
 gcloud config get-value project
 ```
 
-For the JVM crawl process, either use Application Default Credentials:
+For the JVM crawl process, prefer a service account. Grant it read access to
+the bucket and point the ignored config at its JSON key with `credentials_path`:
+
+```bash
+export ALIDA_GCS_FIXTURE_SERVICE_ACCOUNT=alida-gcs-crawler
+export ALIDA_GCS_FIXTURE_SERVICE_ACCOUNT_EMAIL="${ALIDA_GCS_FIXTURE_SERVICE_ACCOUNT}@${ALIDA_GCS_FIXTURE_PROJECT}.iam.gserviceaccount.com"
+export ALIDA_GCS_FIXTURE_CREDENTIALS_PATH="${PWD}/config/alida-gcs-fixture-service-account.json"
+
+gcloud iam service-accounts create "${ALIDA_GCS_FIXTURE_SERVICE_ACCOUNT}" \
+  --project="${ALIDA_GCS_FIXTURE_PROJECT}" \
+  --display-name="Alida GCS fixture crawler"
+
+gcloud storage buckets add-iam-policy-binding "gs://${ALIDA_GCS_FIXTURE_BUCKET}" \
+  --member="serviceAccount:${ALIDA_GCS_FIXTURE_SERVICE_ACCOUNT_EMAIL}" \
+  --role="roles/storage.objectViewer"
+
+gcloud iam service-accounts keys create "${ALIDA_GCS_FIXTURE_CREDENTIALS_PATH}" \
+  --iam-account="${ALIDA_GCS_FIXTURE_SERVICE_ACCOUNT_EMAIL}" \
+  --project="${ALIDA_GCS_FIXTURE_PROJECT}"
+```
+
+If Application Default Credentials are available in your runtime, omitting both
+`credentials_path` and `access_token` also works:
 
 ```bash
 gcloud auth application-default login
 ```
 
-or export a short-lived access token and reference it from your ignored config
-with `access_token: ${ALIDA_GCS_FIXTURE_ACCESS_TOKEN}`:
-
-```bash
-export ALIDA_GCS_FIXTURE_ACCESS_TOKEN="$(gcloud auth print-access-token)"
-```
-
-A service account JSON file is also supported with `credentials_path`.
+For quick local debugging only, a short-lived user access token can be supplied
+with `access_token: ${ALIDA_GCS_FIXTURE_ACCESS_TOKEN}`.
 
 ## Bucket Setup
 
@@ -87,7 +103,7 @@ export ALIDA_GCS_FIXTURE_PREFIX=fixtures/docs/
 export ALIDA_GCS_FIXTURE_DATABASE_URL=jdbc:postgresql://127.0.0.1:55432/alida
 export ALIDA_GCS_FIXTURE_DATABASE_USER=fmw
 export ALIDA_GCS_FIXTURE_DATABASE_PASSWORD=
-export ALIDA_GCS_FIXTURE_ACCESS_TOKEN="$(gcloud auth print-access-token)"
+export ALIDA_GCS_FIXTURE_CREDENTIALS_PATH="${PWD}/config/alida-gcs-fixture-service-account.json"
 ```
 
 Then run:
