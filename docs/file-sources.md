@@ -27,9 +27,7 @@ sources:
     root: /data/docs
     include_extensions: [html, md, txt, json]
     include_globs:
-      - public/*.json
       - public/**/*.json
-      - public/*.md
       - public/**/*.md
     exclude_globs:
       - private/**
@@ -62,11 +60,8 @@ sources:
     region: us-east-1
     prefix: docs/
     include_globs:
-      - docs/*.html
       - docs/**/*.html
-      - docs/*.md
       - docs/**/*.md
-      - docs/*.json
       - docs/**/*.json
     exclude_globs:
       - docs/private/**
@@ -91,11 +86,8 @@ sources:
     credentials_path: ${ALIDA_GCS_CREDENTIALS_PATH}
     prefix: docs/
     include_globs:
-      - docs/*.html
       - docs/**/*.html
-      - docs/*.md
       - docs/**/*.md
-      - docs/*.json
       - docs/**/*.json
     exclude_globs:
       - docs/private/**
@@ -120,10 +112,8 @@ crawls, globs are evaluated against the root-relative file path.
 When `include_globs` is empty or omitted, every discovered file or object is
 included unless it matches `exclude_globs`.
 
-Globs use Java `PathMatcher` semantics. A pattern such as `docs/**/*.json`
-matches files in nested directories like `docs/guides/a.json`, but not direct
-children like `docs/a.json`. Include both `docs/*.json` and `docs/**/*.json`
-when you want both.
+Recursive globs include direct and nested children. A pattern such as
+`docs/**/*.json` matches both `docs/a.json` and `docs/guides/a.json`.
 
 Use the source `prefix` for S3/GCS to reduce listing scope, then use globs for
 file-type or subdirectory selection:
@@ -131,7 +121,6 @@ file-type or subdirectory selection:
 ```yaml
 prefix: docs/
 include_globs:
-  - docs/*.json
   - docs/**/*.json
 exclude_globs:
   - docs/private/**
@@ -152,7 +141,6 @@ sources:
     bucket: example-docs
     prefix: exports/
     include_globs:
-      - exports/*.json
       - exports/**/*.json
     language:
       mode: html

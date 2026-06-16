@@ -94,9 +94,22 @@
                       requests)]
     (is (= ["fixtures/docs/a.json"]
            (mapv :key (source/discover sys (assoc source-cfg
-                                                  :include_globs ["fixtures/docs/*.json"
-                                                                  "fixtures/docs/**/*.json"]
+                                                  :include_globs ["fixtures/docs/**/*.json"]
                                                   :exclude_globs ["fixtures/docs/private/**"])))))))
+
+(deftest recursive-globs-include-direct-and-nested-children
+  (let [requests (atom [])
+        sys (fake-gcs {{:bucket "alida-gcs-fixtures"
+                        :prefix "fixtures/docs/"
+                        :max_results 1000}
+                       {:items [{:name "fixtures/docs/a.json"}
+                                {:name "fixtures/docs/nested/b.json"}
+                                {:name "fixtures/docs/c.txt"}]}}
+                      {}
+                      requests)]
+    (is (= ["fixtures/docs/a.json" "fixtures/docs/nested/b.json"]
+           (mapv :key (source/discover sys (assoc source-cfg
+                                                  :include_globs ["fixtures/docs/**/*.json"])))))))
 
 (deftest fetches-gcs-object-content
   (let [requests (atom [])
