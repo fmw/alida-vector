@@ -45,6 +45,8 @@ For crawl cleanup and extraction tuning, see [Crawl Tuning](docs/tuning.md).
 
 For local, S3, and GCS file-source configuration, see [File Sources](docs/file-sources.md).
 
+For real-bucket validation workflows, see [Manual Fixture Verification](docs/manual-fixtures.md).
+
 For development-time verifier checks with intentionally unsafe local content, see [LLM Verification Fixture](docs/llm-verification-fixture.md).
 
 For container and Kubernetes deployment notes, see [Deployment](docs/deployment.md).
