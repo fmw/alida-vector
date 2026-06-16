@@ -647,21 +647,41 @@
                          regular-terminal (db/create-run! ds index-cfg "hash-1")]
                      (doseq [run [disabled-terminal disabled-active regular-terminal]]
                        (insert-searchable-chunk! ds (:id run) (str "Content " (:id run))))
+                     (db/save-report! ds (:id disabled-terminal) {:slack_summary "summary"
+                                                                  :full_report "full"})
                      (db/update-run-status! ds (:id disabled-terminal) "complete" {:verification_verdict "pass"})
                      (db/update-run-status! ds (:id disabled-active) "crawling")
                      (db/update-run-status! ds (:id regular-terminal) "complete" {:verification_verdict "pass"})
-                     (let [pruned (db/prune-runs! ds {:disabled-embeddings true})]
+                     (let [pruned (db/prune-runs! ds {:disabled-embeddings true})
+                           partition-name (pgvector/run-partition-name 1536 (:id disabled-terminal))]
                        {:pruned pruned
                         :disabled-terminal (db/get-run ds (:id disabled-terminal))
                         :disabled-active (db/get-run ds (:id disabled-active))
-                        :regular-terminal (db/get-run ds (:id regular-terminal))}))))]
+                        :regular-terminal (db/get-run ds (:id regular-terminal))
+                        :disabled-terminal-partition (:partition
+                                                      (jdbc/execute-one!
+                                                       ds
+                                                       ["SELECT to_regclass(?)::text AS partition" partition-name]
+                                                       db/jdbc-opts))
+                        :disabled-terminal-report (db/get-report ds (:id disabled-terminal))
+                        :events (:n (jdbc/execute-one!
+                                     ds
+                                     ["SELECT count(*) AS n
+                                       FROM alida_events
+                                       WHERE event_type = 'run-pruned'
+                                         AND details->>'run_id' = ?"
+                                      (str (:id disabled-terminal))]
+                                     db/jdbc-opts))}))))]
     (if (= :skipped result)
       (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
       (testing "disabled-embedding pruning only removes terminal disabled runs"
         (is (= 1 (get-in result [:pruned :pruned_count])))
         (is (nil? (:disabled-terminal result)))
         (is (= "crawling" (get-in result [:disabled-active :lifecycle_status])))
-        (is (= "complete" (get-in result [:regular-terminal :lifecycle_status])))))))
+        (is (= "complete" (get-in result [:regular-terminal :lifecycle_status])))
+        (is (nil? (:disabled-terminal-partition result)))
+        (is (nil? (:disabled-terminal-report result)))
+        (is (= 1 (:events result)))))))
 
 (deftest ^:integration prune-can-remove-runs-referenced-by-diff-previous-run
   (let [result (with-temp-database
