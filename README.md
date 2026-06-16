@@ -29,7 +29,7 @@ The project is written in Clojure.
 
 - crawlable websites, using sitemaps and regular HTML parsing
 - JavaScript-heavy pages, especially Jira Service Management support sites, using a headless browser
-- files and structured content exports
+- files and structured content exports from local paths, S3, and GCS
 
 ## Automate, but verify
 
@@ -42,6 +42,8 @@ Alida Vector uses an LLM verification step to validate scraped data before a can
 Alida Vector is designed to run as a scheduled job, such as a Docker container running on Kubernetes.
 
 For crawl cleanup and extraction tuning, see [Crawl Tuning](docs/tuning.md).
+
+For local, S3, and GCS file-source configuration, see [File Sources](docs/file-sources.md).
 
 For development-time verifier checks with intentionally unsafe local content, see [LLM Verification Fixture](docs/llm-verification-fixture.md).
 
