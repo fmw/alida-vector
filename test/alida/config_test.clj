@@ -59,6 +59,14 @@
                                  :type "s3"
                                  :prefix "docs/"})))))
 
+(deftest rejects-gcs-source-without-bucket
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo #"requires bucket"
+       (load-from-map (assoc-in valid-config [:indexes 0 :sources 0]
+                                {:id "objects"
+                                 :type "gcs"
+                                 :prefix "docs/"})))))
+
 (deftest structural-hash-redacts-secrets
   (testing "secret values do not change the structural hash"
     (is (= (config/structural-config-hash (assoc-in valid-config [:verification :api_key] "a"))
@@ -814,12 +822,19 @@ indexes:
         region: eu-west-1
         include_globs: [docs/**/*.md, docs/**/*.json]
         exclude_globs: [docs/private/**]
+      - id: cloud-objects
+        type: gcs
+        bucket: alida-gcs-fixtures
+        project_id: alida-dev
+        prefix: fixtures/docs/
+        include_globs: [fixtures/docs/*.json, fixtures/docs/**/*.json]
+        exclude_globs: [fixtures/docs/private/**]
 ")
       (let [index (-> (config/load-config (.getPath file)) :indexes first)
             sources (:sources index)]
         (is (= 100 (-> index :embedding :retry_jitter_ms)))
         (is (= 250 (-> index :embedding :inter_batch_delay_ms)))
-        (is (= ["local" "website" "jira-service-management" "s3"] (mapv :type sources)))
+        (is (= ["local" "website" "jira-service-management" "s3" "gcs"] (mapv :type sources)))
         (is (= ["html" "md"] (-> sources first :include_extensions)))
         (is (= ["https://example.test/docs/"] (-> sources second :allowed_url_prefixes)))
         (is (= ["https://example.test/docs/secret"] (-> sources second :denied_urls)))
@@ -840,7 +855,12 @@ indexes:
         (is (= "docs/" (-> sources (nth 3) :prefix)))
         (is (= "eu-west-1" (-> sources (nth 3) :region)))
         (is (= ["docs/**/*.md" "docs/**/*.json"] (-> sources (nth 3) :include_globs)))
-        (is (= ["docs/private/**"] (-> sources (nth 3) :exclude_globs))))
+        (is (= ["docs/private/**"] (-> sources (nth 3) :exclude_globs)))
+        (is (= "alida-gcs-fixtures" (-> sources (nth 4) :bucket)))
+        (is (= "alida-dev" (-> sources (nth 4) :project_id)))
+        (is (= "fixtures/docs/" (-> sources (nth 4) :prefix)))
+        (is (= ["fixtures/docs/*.json" "fixtures/docs/**/*.json"] (-> sources (nth 4) :include_globs)))
+        (is (= ["fixtures/docs/private/**"] (-> sources (nth 4) :exclude_globs))))
       (finally
         (.delete file)))))
 

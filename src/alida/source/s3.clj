@@ -1,24 +1,8 @@
 (ns alida.source.s3
   (:require [alida.source :as source]
-            [clojure.java.io :as io]
+            [alida.source.object-storage :as object-storage]
             [clojure.string :as str]
-            [cognitect.aws.client.api :as aws])
-  (:import [java.io InputStream]
-           [java.nio.file FileSystems Paths]))
-
-(def default-max-pages 1000)
-
-(def extension-content-types
-  {"html" "text/html"
-   "htm" "text/html"
-   "txt" "text/plain"
-   "md" "text/markdown"
-   "markdown" "text/markdown"
-   "json" "application/json"})
-
-(def generic-s3-content-types
-  #{"application/octet-stream"
-    "binary/octet-stream"})
+            [cognitect.aws.client.api :as aws]))
 
 (defn- s3-client
   [sys source-cfg]
@@ -39,36 +23,9 @@
   (and (map? value)
        (contains? value :cognitect.anomalies/category)))
 
-(defn- json-safe-value
-  [value]
-  (cond
-    (or (nil? value)
-        (string? value)
-        (number? value)
-        (boolean? value)
-        (keyword? value)
-        (inst? value))
-    value
-
-    (instance? Throwable value)
-    {:class (.getName (class value))
-     :message (ex-message value)}
-
-    (map? value)
-    (into {} (map (fn [[k v]] [k (json-safe-value v)]) value))
-
-    (sequential? value)
-    (mapv json-safe-value value)
-
-    (set? value)
-    (mapv json-safe-value value)
-
-    :else
-    (str value)))
-
 (defn- sanitize-aws-anomaly
   [result]
-  (json-safe-value result))
+  (object-storage/json-safe-value result))
 
 (defn- throw-aws-anomaly!
   [source-cfg op result]
@@ -91,40 +48,9 @@
                          :bucket (:bucket item)
                          :key (:key item))))
 
-(defn- extension
-  [path]
-  (some-> (re-find #"\.([^.]+)$" (str path))
-          second
-          str/lower-case))
-
-(defn- content-type
-  [key s3-content-type]
-  (or (when-let [value (not-empty (str/trim (str s3-content-type)))]
-        (let [base-type (str/trim (first (str/split (str/lower-case value) #";" 2)))]
-          (when-not (contains? generic-s3-content-types base-type)
-            value)))
-      (get extension-content-types (extension key))
-      "application/octet-stream"))
-
 (defn- canonical-url
   [bucket key]
-  (str "s3://" bucket "/" key))
-
-(defn- path-matcher
-  [glob]
-  (.getPathMatcher (FileSystems/getDefault) (str "glob:" glob)))
-
-(defn- glob-matches?
-  [glob key]
-  (.matches (path-matcher glob) (Paths/get key (make-array String 0))))
-
-(defn- object-included?
-  [source-cfg key]
-  (let [include-globs (:include_globs source-cfg)
-        exclude-globs (:exclude_globs source-cfg)]
-    (and (or (empty? include-globs)
-             (some #(glob-matches? % key) include-globs))
-         (not-any? #(glob-matches? % key) exclude-globs))))
+  (object-storage/canonical-url "s3" bucket key))
 
 (defn- object-item
   [source-cfg object]
@@ -135,7 +61,7 @@
      :canonical_url (canonical-url bucket key)
      :bucket bucket
      :key key
-     :content_type (content-type key nil)
+     :content_type (object-storage/content-type key nil)
      :size (:Size object)
      :etag (:ETag object)
      :last_modified (:LastModified object)}))
@@ -147,12 +73,12 @@
                (let [key (:Key object)]
                  (when (and (seq key)
                             (not (str/ends-with? key "/"))
-                            (object-included? source-cfg key))
+                            (object-storage/object-included? source-cfg key))
                    (object-item source-cfg object)))))))
 
 (defn- max-pages
   [source-cfg]
-  (or (:max_pages source-cfg) default-max-pages))
+  (or (:max_pages source-cfg) object-storage/default-max-pages))
 
 (defn- list-request
   [source-cfg continuation-token remaining]
@@ -189,16 +115,6 @@
                      :source-id (:id source-cfg)})))
   (discover* sys source-cfg (s3-client sys source-cfg)))
 
-(defn- body-string
-  [body]
-  (cond
-    (string? body) body
-    (bytes? body) (String. ^bytes body "UTF-8")
-    (instance? InputStream body) (with-open [reader (io/reader body :encoding "UTF-8")]
-                                   (slurp reader))
-    (nil? body) ""
-    :else (str body)))
-
 (defmethod source/fetch :s3
   [sys source-cfg discovered-item]
   (if (source/anomaly? discovered-item)
@@ -211,6 +127,6 @@
       (if (aws-anomaly? response)
         (fetch-anomaly source-cfg (:op request) discovered-item response)
         (assoc discovered-item
-               :body (body-string (:Body response))
-               :content_type (content-type (:key discovered-item) (:ContentType response))
+               :body (object-storage/body-string (:Body response))
+               :content_type (object-storage/content-type (:key discovered-item) (:ContentType response))
                :title (or (:title discovered-item) (:key discovered-item)))))))
