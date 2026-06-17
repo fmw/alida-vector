@@ -131,12 +131,27 @@
 
 (defn- validate-verification-options!
   [config]
-  (let [max-prompt-tokens (get-in config [:verification :max_prompt_tokens])]
+  (let [verification (:verification config)
+        max-prompt-tokens (:max_prompt_tokens verification)]
     (when (and (some? max-prompt-tokens) (not (pos-int? max-prompt-tokens)))
       (throw (ex-info "Invalid verification config: max_prompt_tokens must be positive"
                       {:type :alida.config/invalid-verification-provider-config
                        :key :max_prompt_tokens
-                       :value max-prompt-tokens}))))
+                       :value max-prompt-tokens})))
+    (doseq [k [:max_retries :retry_initial_ms]
+            :let [v (get verification k)]
+            :when (and (some? v) (not (pos-int? v)))]
+      (throw (ex-info (str "Invalid verification config: " (name k) " must be positive")
+                      {:type :alida.config/invalid-verification-provider-config
+                       :key k
+                       :value v})))
+    (doseq [k [:retry_jitter_ms :inter_prompt_delay_ms]
+            :let [v (get verification k)]
+            :when (and (some? v) (not (nat-int? v)))]
+      (throw (ex-info (str "Invalid verification config: " (name k) " must be zero or positive")
+                      {:type :alida.config/invalid-verification-provider-config
+                       :key k
+                       :value v}))))
   config)
 
 (defn- validate-positive-embedding-options!

@@ -1,11 +1,16 @@
 (ns alida.verify
-  (:require [alida.token :as token]
+  (:require [alida.retry :as retry]
+            [alida.token :as token]
             [clojure.data.json :as json]
             [clojure.string :as str]
             [hato.client :as http]))
 
 (def default-request-timeout-ms 60000)
 (def default-max-prompt-tokens 12000)
+(def default-max-retries 3)
+(def default-retry-initial-ms 1000)
+(def default-retry-jitter-ms 0)
+(def default-inter-prompt-delay-ms 0)
 
 (def verdict-rank
   {"pass" 0
@@ -55,7 +60,9 @@
                       {:type :alida.verify/http-error
                        :status status
                        :body (:body response)
-                       :headers (:headers response)})))))
+                       :headers (:headers response)
+                       :retry-after-ms (retry/retry-after-ms (:headers response))
+                       :retryable (retry/retryable-status? status)})))))
 
 (defn strictest-verdict
   [& verdicts]
@@ -391,3 +398,12 @@
   (throw (ex-info (str "Unsupported verification provider: " (:provider provider-cfg))
                   {:type :alida.verify/unsupported-provider
                    :provider (:provider provider-cfg)})))
+
+(defn complete-with-retries
+  [sys provider-cfg prompt]
+  (retry/with-retries sys
+                      (merge {:max_retries default-max-retries
+                              :retry_initial_ms default-retry-initial-ms
+                              :retry_jitter_ms default-retry-jitter-ms}
+                             provider-cfg)
+                      #(complete sys provider-cfg prompt)))
