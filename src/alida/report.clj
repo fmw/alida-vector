@@ -109,6 +109,18 @@
   [& parts]
   (str "`" (str/join " " parts) "`"))
 
+(defn- shell-quote
+  [value]
+  (str "'" (str/replace (str value) "'" "'\\''") "'"))
+
+(defn- cli-command
+  [summary subcommand & args]
+  (let [config-path (:config_path summary)
+        parts (cond-> ["alida-vector" subcommand]
+                (seq (str/trim (or config-path "")))
+                (conj "--config" (shell-quote config-path)))]
+    (apply command (concat parts (map shell-quote args)))))
+
 (defn- short-run-id
   [run-id]
   (subs (str run-id) 0 8))
@@ -139,18 +151,18 @@
 
       (= "caution" final-verdict)
       (str "Review required. Inspect with "
-           (command "alida-vector" "report" run_id)
+           (cli-command summary "report" run_id)
            ", then activate with "
-           (command "alida-vector" "activate" run_id "--allow-caution")
+           (cli-command summary "activate" run_id "--allow-caution")
            " or reject with "
-           (command "alida-vector" "reject" run_id)
+           (cli-command summary "reject" run_id)
            ".")
 
       (= "fail" final-verdict)
       (str "Verification failed. Inspect with "
-           (command "alida-vector" "report" run_id)
+           (cli-command summary "report" run_id)
            " and reject with "
-           (command "alida-vector" "reject" run_id)
+           (cli-command summary "reject" run_id)
            ".")
 
       :else
@@ -159,12 +171,12 @@
 (defn- action-commands
   [{:keys [run_id] :as summary}]
   (let [final-verdict (verdict summary)]
-    (cond-> [(str "Report: " (command "alida-vector" "report" run_id))]
+    (cond-> [(str "Report: " (cli-command summary "report" run_id))]
       (= "caution" final-verdict)
-      (conj (str "Activate caution: " (command "alida-vector" "activate" run_id "--allow-caution")))
+      (conj (str "Activate caution: " (cli-command summary "activate" run_id "--allow-caution")))
 
       (= "fail" final-verdict)
-      (conj (str "Reject: " (command "alida-vector" "reject" run_id))))))
+      (conj (str "Reject: " (cli-command summary "reject" run_id))))))
 
 (defn- change-summary
   [summary]
