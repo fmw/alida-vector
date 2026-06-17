@@ -209,8 +209,41 @@
   [value]
   (json/write-str value))
 
+(def diff-entry-groups
+  [{:key :added_urls
+    :entry-keys [:source_id :canonical_url]}
+   {:key :removed_urls
+    :entry-keys [:source_id :canonical_url]}
+   {:key :changed_urls
+    :entry-keys [:source_id
+                 :canonical_url
+                 :previous_normalized_content_hash
+                 :current_normalized_content_hash]}
+   {:key :moved_urls
+    :entry-keys [:source_id
+                 :previous_canonical_url
+                 :current_canonical_url]}])
+
+(defn- empty-diff-batch
+  []
+  (into {} (map (fn [{:keys [key]}] [key []]) diff-entry-groups)))
+
+(defn- diff-batch-empty?
+  [diff-batch]
+  (every? empty? (vals diff-batch)))
+
+(defn- prompt-diff
+  [diff diff-batch]
+  (when diff
+    {:previous_run_id (:previous_run_id diff)
+     :summary (:summary diff)
+     :total_counts (into {} (map (fn [{:keys [key]}]
+                                   [key (count (get diff key))])
+                                 diff-entry-groups))
+     :batch_entries (or diff-batch (empty-diff-batch))}))
+
 (defn build-prompt
-  [{:keys [run_id index_name diff deterministic_verification documents batch]}]
+  [{:keys [run_id index_name diff diff_batch deterministic_verification documents batch]}]
   (str/join
    "\n\n"
    (remove nil?
@@ -219,9 +252,12 @@
             (str "Run ID: " run_id)
             (str "Index: " index_name)
             (when batch
-              (str "Batch: " (:number batch) " of " (:count batch)))
+              (str "Batch: " (:number batch) " of " (:count batch)
+                   (when (:kind batch)
+                     (str " (" (:kind batch) ")"))))
             (str "Deterministic gate: " (json-block deterministic_verification))
-            (str "Diff: " (json-block diff))
+            (str "Diff summary and this batch of URL-level diff entries: "
+                 (json-block (prompt-diff diff diff_batch)))
             (str "Documents for full diff validation: " (json-block documents))])))
 
 (def conservative-batch-marker
@@ -229,10 +265,11 @@
    :count 999999})
 
 (defn- prompt-token-estimate
-  [input documents batch]
+  [input documents batch diff-batch]
   (token/estimate (build-prompt (assoc input
                                         :documents documents
-                                        :batch batch))))
+                                        :batch batch
+                                        :diff_batch diff-batch))))
 
 (defn- with-chunks
   [document chunks]
@@ -247,8 +284,8 @@
     (assoc :canonical-url (:canonical_url (first documents)))))
 
 (defn- require-prompt-fits!
-  [input documents max-tokens error-type message]
-  (let [tokens (prompt-token-estimate input documents conservative-batch-marker)]
+  [input documents diff-batch max-tokens error-type message]
+  (let [tokens (prompt-token-estimate input documents conservative-batch-marker diff-batch)]
     (when (> tokens max-tokens)
       (throw (ex-info message
                       (assoc (prompt-fit-details documents tokens max-tokens)
@@ -260,6 +297,7 @@
   (try
     (require-prompt-fits! input
                           [(with-chunks document [chunk])]
+                          (empty-diff-batch)
                           max-tokens
                           :alida.verify/chunk-exceeds-max-prompt-tokens
                           "Verification document chunk exceeds max_prompt_tokens")
@@ -274,7 +312,8 @@
   (let [candidate (conj current chunk)
         candidate-tokens (prompt-token-estimate input
                                                 [(with-chunks document candidate)]
-                                                conservative-batch-marker)]
+                                                conservative-batch-marker
+                                                (empty-diff-batch))]
     (cond
       (<= candidate-tokens max-tokens)
       {:input input
@@ -303,7 +342,8 @@
 
 (defn- split-document
   [input document max-tokens]
-  (if (<= (prompt-token-estimate input [document] conservative-batch-marker) max-tokens)
+  (if (<= (prompt-token-estimate input [document] conservative-batch-marker (empty-diff-batch))
+          max-tokens)
     [document]
     (let [{:keys [batches current]}
           (reduce append-chunk-document
@@ -323,7 +363,10 @@
 (defn- append-document-batch
   [{:keys [input batches current max-tokens]} document]
   (let [candidate (conj current document)
-        candidate-tokens (prompt-token-estimate input candidate conservative-batch-marker)]
+        candidate-tokens (prompt-token-estimate input
+                                                candidate
+                                                conservative-batch-marker
+                                                (empty-diff-batch))]
     (if (and (seq current) (> candidate-tokens max-tokens))
       {:batches (conj batches current)
        :current [document]
@@ -346,6 +389,75 @@
     (cond-> batches
       (seq current) (conj current))))
 
+(defn- diff-items
+  [diff]
+  (vec
+   (mapcat (fn [{:keys [key entry-keys]}]
+             (map (fn [entry]
+                    {:group key
+                     :entry (select-keys entry entry-keys)})
+                  (get diff key)))
+           diff-entry-groups)))
+
+(defn- append-diff-item
+  [diff-batch {:keys [group entry]}]
+  (update diff-batch group (fnil conj []) entry))
+
+(defn- prompt-fit-details-for-diff
+  [diff-batch estimated-tokens max-tokens]
+  {:estimated-tokens estimated-tokens
+   :max-prompt-tokens max-tokens
+   :diff-entry-count (reduce + 0 (map count (vals diff-batch)))})
+
+(defn- require-diff-item-fits!
+  [input item max-tokens]
+  (let [diff-batch (append-diff-item (empty-diff-batch) item)
+        tokens (prompt-token-estimate input [] conservative-batch-marker diff-batch)]
+    (when (> tokens max-tokens)
+      (throw (ex-info "Verification diff entry exceeds max_prompt_tokens"
+                      (assoc (prompt-fit-details-for-diff diff-batch tokens max-tokens)
+                             :type :alida.verify/diff-entry-exceeds-max-prompt-tokens
+                             :diff-group (:group item)))))
+    tokens))
+
+(defn- append-diff-item-batch
+  [{:keys [input batches current max-tokens]} item]
+  (let [candidate (append-diff-item current item)
+        candidate-tokens (prompt-token-estimate input [] conservative-batch-marker candidate)]
+    (cond
+      (<= candidate-tokens max-tokens)
+      {:input input
+       :batches batches
+       :current candidate
+       :max-tokens max-tokens}
+
+      (not (diff-batch-empty? current))
+      (do
+        (require-diff-item-fits! input item max-tokens)
+        {:input input
+         :batches (conj batches current)
+         :current (append-diff-item (empty-diff-batch) item)
+         :max-tokens max-tokens})
+
+      :else
+      (do
+        (require-diff-item-fits! input item max-tokens)
+        {:input input
+         :batches batches
+         :current candidate
+         :max-tokens max-tokens}))))
+
+(defn diff-batches
+  [input diff max-tokens]
+  (let [{:keys [batches current]} (reduce append-diff-item-batch
+                                          {:batches []
+                                           :current (empty-diff-batch)
+                                           :input input
+                                           :max-tokens max-tokens}
+                                          (diff-items diff))]
+    (cond-> batches
+      (not (diff-batch-empty? current)) (conj current))))
+
 (defn- require-final-prompt-fits!
   [prompt max-tokens]
   (let [tokens (token/estimate prompt)]
@@ -361,18 +473,34 @@
   (let [max-tokens (or max_prompt_tokens default-max-prompt-tokens)
         _ (require-prompt-fits! input
                                 []
+                                (empty-diff-batch)
                                 max-tokens
                                 :alida.verify/prompt-overhead-exceeds-max-prompt-tokens
                                 "Verification prompt overhead exceeds max_prompt_tokens")
-        batches (or (seq (document-batches input documents max-tokens))
-                    [[]])
+        batches (concat
+                 (mapv (fn [documents]
+                         {:kind "documents"
+                          :documents documents
+                          :diff_batch (empty-diff-batch)})
+                       (document-batches input documents max-tokens))
+                 (mapv (fn [diff-batch]
+                         {:kind "diff"
+                          :documents []
+                          :diff_batch diff-batch})
+                       (diff-batches input (:diff input) max-tokens)))
+        batches (or (seq batches)
+                    [{:kind "empty"
+                      :documents []
+                      :diff_batch (empty-diff-batch)}])
         batch-count (count batches)]
-    (mapv (fn [index batch]
+    (mapv (fn [index {:keys [kind documents diff_batch]}]
             (require-final-prompt-fits!
              (build-prompt (assoc input
-                                  :documents batch
+                                  :documents documents
+                                  :diff_batch diff_batch
                                   :batch {:number (inc index)
-                                          :count batch-count}))
+                                          :count batch-count
+                                          :kind kind}))
              max-tokens))
           (range)
           batches)))
@@ -404,6 +532,7 @@
   (retry/with-retries sys
                       (merge {:max_retries default-max-retries
                               :retry_initial_ms default-retry-initial-ms
-                              :retry_jitter_ms default-retry-jitter-ms}
+                              :retry_jitter_ms default-retry-jitter-ms
+                              :operation "verification-provider"}
                              provider-cfg)
                       #(complete sys provider-cfg prompt)))

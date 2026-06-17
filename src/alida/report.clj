@@ -44,6 +44,40 @@
           (llm-verdict summary)
           (verdict summary)))
 
+(defn- failure-detail
+  [data k label]
+  (when-let [value (get data k)]
+    (str label "=" value)))
+
+(defn- failure-action
+  [data]
+  (cond
+    (= 429 (:status data))
+    "The provider rate-limited the request after retries. Wait for quota to recover or reduce request volume before rerunning."
+
+    (:retryable data)
+    "The provider returned a retryable error after retries. Check provider health and rerun when stable."
+
+    :else
+    "Inspect the pod logs and run metadata, fix the source/config issue, then rerun."))
+
+(defn failure-summary
+  [{:keys [run_id index_name message data]}]
+  (let [details (keep identity
+                      [(failure-detail data :phase "phase")
+                       (failure-detail data :status "status")
+                       (failure-detail data :retryable "retryable")
+                       (failure-detail data :type "type")])]
+    (str "Alida Vector crawl failed"
+         (when index_name (str " for `" index_name "`"))
+         (when run_id (str " run `" run_id "`"))
+         ": "
+         (or message "unknown error")
+         (when (seq details)
+           (str " (" (str/join ", " details) ")"))
+         "\nAction: "
+         (failure-action data))))
+
 (defn- slack-escape
   [value]
   (-> (str value)

@@ -1,4 +1,5 @@
 (ns alida.retry
+  (:require [com.brunobonacci.mulog :as u])
   (:import [java.io IOException]
            [java.time Instant ZonedDateTime]
            [java.time.format DateTimeFormatter]))
@@ -48,7 +49,7 @@
           (catch Exception _ nil)))))
 
 (defn with-retries
-  [sys {:keys [max_retries retry_initial_ms retry_jitter_ms]} f]
+  [sys {:keys [max_retries retry_initial_ms retry_jitter_ms operation]} f]
   (let [max-retries max_retries
         retry-initial-ms retry_initial_ms
         retry-jitter-ms retry_jitter_ms
@@ -62,9 +63,17 @@
                 (f)
                 (catch Exception e
                   (if (and (retryable-exception? e) (< attempt-number max-retries))
-                    (do
-                      (sleep! sys (retry-delay-ms delay-ms
-                                                  (:retry-after-ms (ex-data e))))
+                    (let [error-data (ex-data e)
+                          sleep-ms (retry-delay-ms delay-ms
+                                                   (:retry-after-ms error-data))]
+                      (u/log ::retry-sleep
+                             :operation operation
+                             :attempt attempt-number
+                             :max-retries max-retries
+                             :delay-ms sleep-ms
+                             :status (:status error-data)
+                             :error-type (:type error-data))
+                      (sleep! sys sleep-ms)
                       (attempt (inc attempt-number) (* 2 delay-ms)))
                     (throw e)))))]
       (attempt 1 retry-initial-ms))))
