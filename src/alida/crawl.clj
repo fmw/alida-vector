@@ -8,6 +8,7 @@
             [alida.lang :as lang]
             [alida.notify.slack :as slack]
             [alida.report :as report]
+            [alida.retry :as retry]
             [alida.run :as run]
             [alida.source :as source]
             [alida.vector.pgvector :as pgvector]
@@ -542,7 +543,16 @@
                                      :documents (verification-documents source-results run-diff)
                                      :max_prompt_tokens (:max_prompt_tokens verification-cfg)})]
                        (combined-llm-result
-                        (mapv #(verify/complete sys verification-cfg %) prompts))))
+                        (mapv (fn [index prompt]
+                                (when (and (pos? index)
+                                           (pos? (or (:inter_prompt_delay_ms verification-cfg)
+                                                     verify/default-inter-prompt-delay-ms)))
+                                  (retry/sleep! sys
+                                                (or (:inter_prompt_delay_ms verification-cfg)
+                                                    verify/default-inter-prompt-delay-ms)))
+                                (verify/complete-with-retries sys verification-cfg prompt))
+                              (range)
+                              prompts))))
         final-verdict (if llm-result
                         (verify/strictest-verdict
                          (:deterministic_verdict deterministic-verification)

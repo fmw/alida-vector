@@ -7,6 +7,21 @@
             [clojure.string :as str]
             [clojure.test :refer [deftest is]]))
 
+(defn- json-response
+  [body]
+  {:status 200
+   :body (json/write-str body)})
+
+(defn- fake-sys
+  [responses requests sleeps]
+  {:alida/http-request (fn [request]
+                         (swap! requests conj request)
+                         (let [response (first @responses)]
+                           (swap! responses subvec 1)
+                           response))
+   :alida/sleep (fn [millis]
+                  (swap! sleeps conj millis))})
+
 (deftest deterministic-gate-passes-when-thresholds-are-not-exceeded
   (is (= {:deterministic_verdict "pass"
           :deterministic_findings []}
@@ -162,6 +177,33 @@
                         #"Invalid verification verdict"
                         (verify/parse-structured-verdict
                          (json/write-str {:verdict "maybe"})))))
+
+(deftest azure-openai-verification-retries-retryable-errors
+  (let [responses (atom [{:status 429
+                          :headers {"Retry-After" "2"}
+                          :body "{\"error\":\"rate limited\"}"}
+                         (json-response
+                          {:choices [{:message
+                                      {:content
+                                       (json/write-str
+                                        {:verdict "pass"
+                                         :reasoning "Looks consistent"
+                                         :findings []
+                                         :security_findings []})}}]})])
+        requests (atom [])
+        sleeps (atom [])
+        result (verify/complete-with-retries
+                (fake-sys responses requests sleeps)
+                {:provider "azure-openai"
+                 :endpoint "https://example.openai.azure.com/"
+                 :deployment_name "gpt"
+                 :api_key "azure-key"
+                 :max_retries 2
+                 :retry_initial_ms 5}
+                "verify this")]
+    (is (= "pass" (:verdict result)))
+    (is (= 2 (count @requests)))
+    (is (= [2000] @sleeps))))
 
 (deftest openai-complete-requests-json-verdict
   (let [requests (atom [])

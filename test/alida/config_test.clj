@@ -574,6 +574,30 @@ indexes:
       (finally
         (.delete file)))))
 
+(deftest verification-retry-options-are-validated
+  (testing "positive retry options load"
+    (let [cfg (load-from-map
+               (update valid-config
+                       :verification
+                       assoc
+                       :max_retries 2
+                       :retry_initial_ms 1000
+                       :retry_jitter_ms 250
+                       :inter_prompt_delay_ms 500))]
+      (is (= 2 (get-in cfg [:verification :max_retries])))
+      (is (= 500 (get-in cfg [:verification :inter_prompt_delay_ms])))))
+  (testing "invalid retry options fail"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"max_retries must be positive"
+         (load-from-map
+          (assoc-in valid-config [:verification :max_retries] 0))))
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"inter_prompt_delay_ms must be zero or positive"
+         (load-from-map
+          (assoc-in valid-config [:verification :inter_prompt_delay_ms] -1))))))
+
 (deftest language-config-loads-for-index-and-source
   (let [file (java.io.File/createTempFile "alida-language-config" ".yml")]
     (try
