@@ -25,24 +25,30 @@
   [phase-stats k]
   (value (get phase-stats k)))
 
+(defn- label-prefix
+  [{:keys [notification_label]}]
+  (when (seq (str/trim (or notification_label "")))
+    (str "[" (str/trim notification_label) "] ")))
+
 (defn slack-summary
   [{:keys [run_id index_name document_count chunk_count error_count embedding_stats phase_stats] :as summary}]
-  (format "%s run %s: documents=%s, chunks=%s, errors=%s, added=%s, removed=%s, changed=%s, moved=%s, reused=%s, embedded=%s, crawl_ms=%s, deterministic=%s, llm=%s, verdict=%s"
-          index_name
-          run_id
-          (value document_count)
-          (value chunk_count)
-          (value error_count)
-          (diff-count summary :added_count)
-          (diff-count summary :removed_count)
-          (diff-count summary :changed_count)
-          (diff-count summary :moved_count)
-          (value (:reused_chunk_count embedding_stats))
-          (value (:embedded_chunk_count embedding_stats))
-          (value (:crawl_duration_ms phase_stats))
-          (deterministic-verdict summary)
-          (llm-verdict summary)
-          (verdict summary)))
+  (str (label-prefix summary)
+       (format "%s run %s: documents=%s, chunks=%s, errors=%s, added=%s, removed=%s, changed=%s, moved=%s, reused=%s, embedded=%s, crawl_ms=%s, deterministic=%s, llm=%s, verdict=%s"
+               index_name
+               run_id
+               (value document_count)
+               (value chunk_count)
+               (value error_count)
+               (diff-count summary :added_count)
+               (diff-count summary :removed_count)
+               (diff-count summary :changed_count)
+               (diff-count summary :moved_count)
+               (value (:reused_chunk_count embedding_stats))
+               (value (:embedded_chunk_count embedding_stats))
+               (value (:crawl_duration_ms phase_stats))
+               (deterministic-verdict summary)
+               (llm-verdict summary)
+               (verdict summary))))
 
 (defn- failure-detail
   [data k label]
@@ -68,7 +74,8 @@
                        (failure-detail data :status "status")
                        (failure-detail data :retryable "retryable")
                        (failure-detail data :type "type")])]
-    (str "Alida Vector crawl failed"
+    (str (label-prefix data)
+         "Alida Vector crawl failed"
          (when index_name (str " for `" index_name "`"))
          (when run_id (str " run `" run_id "`"))
          ": "
@@ -288,15 +295,18 @@
              [{:type "header"
                :text {:type "plain_text"
                       :emoji true
-                      :text (truncate (format "%s Alida Vector crawl %s"
+                      :text (truncate (format "%s %sAlida Vector crawl %s"
                                               (verdict-emoji final-verdict)
+                                              (or (label-prefix summary) "")
                                               (verdict-label final-verdict))
                                       150)}}
               {:type "section"
-               :fields [(field "Index" index_name)
-                        (field "Run" (short-run-id run_id))
-                        (field "Status" (or lifecycle_status "-"))
-                        (field "Verdict" final-verdict)]}
+               :fields (cond-> [(field "Index" index_name)
+                                 (field "Run" (short-run-id run_id))
+                                 (field "Status" (or lifecycle_status "-"))
+                                 (field "Verdict" final-verdict)]
+                         (seq (label-prefix summary))
+                         (conj (field "Label" (:notification_label summary))))}
               {:type "section"
                :fields (summary-fields summary document_count chunk_count error_count embedding_stats)}
               (slack-change-detail-blocks summary)

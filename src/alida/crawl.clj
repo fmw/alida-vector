@@ -559,6 +559,10 @@
    :security_findings (vec (mapcat #(or (:security_findings %) []) results))
    :raw_response {:batches (mapv :raw_response results)}})
 
+(defn- notification-label
+  [sys]
+  (not-empty (str/trim (or (get-in sys [:alida/config :notifications :label]) ""))))
+
 (defn- verify-run!
   [sys ds run run-diff deterministic-verification source-results]
   (let [verification-cfg (:verification (:alida/config sys))
@@ -745,6 +749,7 @@
                                            run-diff
                                            deterministic-verification
                                            verification)
+                    summary (assoc summary :notification_label (notification-label sys))
                     built-report (report/build summary)
                     _ (db/save-report! ds (:id run) built-report)
                     _ (u/log ::notification-start
@@ -767,7 +772,9 @@
                                 {:run_id (:id run)
                                  :index_name (:name index-cfg)
                                  :message (or (ex-message e) "Crawl failed")
-                                 :data failure-data})
+                                 :data (cond-> failure-data
+                                         (notification-label sys)
+                                         (assoc :notification_label (notification-label sys)))})
                   notification (slack/post-text! sys failure-text)]
               (u/log ::index-failed
                      :index-name (:name index-cfg)
@@ -777,7 +784,7 @@
                      :error-type (:type failure-data)
                      :notification-sent (:sent notification))
               (throw (ex-info (or (ex-message e) "Crawl failed")
-                              failure-data
+                              (assoc failure-data :notification notification)
                               cause)))))))))
 
 (defn- failed-index

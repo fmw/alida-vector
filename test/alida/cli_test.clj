@@ -236,13 +236,15 @@
                                                  :document_count 2
                                                  :chunk_count 3
                                                  :error_count 0
-                                                 :verification_verdict nil}]
+                                                 :verification_verdict nil
+                                                 :notification {:sent true}}]
                                     :failed []})]
         (let [result (cli/run ["crawl" "--config" "ignored.yml" "--index" "docs"])]
           (is (= 0 (:exit-code result)))
           (is (str/includes? (:message result) "1 succeeded, 0 failed"))
           (is (str/includes? (:message result) "docs"))
-          (is (str/includes? (:message result) "verdict=-")))))))
+          (is (str/includes? (:message result) "verdict=-"))
+          (is (str/includes? (:message result) "notification=sent")))))))
 
 (deftest crawl-command-exits-nonzero-when-any-index-fails
   (with-system-stub
@@ -253,11 +255,13 @@
                     crawl/crawl! (fn [_ _ _]
                                    {:succeeded []
                                     :failed [{:index_name "docs"
-                                              :message "boom"}]})]
+                                              :message "boom"
+                                              :data {:notification {:status 500}}}]})]
         (let [result (cli/run ["crawl" "--config" "ignored.yml"])]
           (is (= 1 (:exit-code result)))
           (is (str/includes? (:message result) "0 succeeded, 1 failed"))
-          (is (str/includes? (:message result) "docs  failed: boom")))))))
+          (is (str/includes? (:message result) "docs  failed: boom"))
+          (is (str/includes? (:message result) "notification=failed(status=500)")))))))
 
 (deftest prune-command-requires-explicit-criteria
   (with-system-stub
