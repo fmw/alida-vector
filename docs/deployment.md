@@ -70,70 +70,15 @@ Container-specific environment variables:
 - `CHROME_BIN`: Chromium binary path.
 - `CHROMEDRIVER_BIN`: Chromedriver binary path.
 
-## Kubernetes CronJob Example
+## Kubernetes CronJob
 
 Run `migrate` during deployment before scheduling recurring crawls, or use an
 init job controlled by your deployment system. The recurring CronJob should run
 `crawl` against mounted config and injected secrets.
 
-```yaml
-apiVersion: batch/v1
-kind: CronJob
-metadata:
-  name: alida-vector
-spec:
-  schedule: "17 * * * *"
-  concurrencyPolicy: Forbid
-  jobTemplate:
-    spec:
-      backoffLimit: 2
-      template:
-        spec:
-          restartPolicy: Never
-          containers:
-            - name: alida-vector
-              image: registry.example.com/alida-vector:2026-06-11
-              imagePullPolicy: IfNotPresent
-              env:
-                - name: JAVA_TOOL_OPTIONS
-                  value: "-XX:MaxRAMPercentage=75"
-                - name: ALIDA_DATABASE_URL
-                  valueFrom:
-                    secretKeyRef:
-                      name: alida-vector
-                      key: database-url
-                - name: ALIDA_DATABASE_USER
-                  valueFrom:
-                    secretKeyRef:
-                      name: alida-vector
-                      key: database-user
-                - name: ALIDA_DATABASE_PASSWORD
-                  valueFrom:
-                    secretKeyRef:
-                      name: alida-vector
-                      key: database-password
-                - name: OPENAI_API_KEY
-                  valueFrom:
-                    secretKeyRef:
-                      name: alida-vector
-                      key: openai-api-key
-                - name: ALIDA_SLACK_WEBHOOK_URL
-                  valueFrom:
-                    secretKeyRef:
-                      name: alida-vector
-                      key: slack-webhook-url
-              volumeMounts:
-                - name: config
-                  mountPath: /config
-                  readOnly: true
-                - name: tmp
-                  mountPath: /tmp
-          volumes:
-            - name: config
-              configMap:
-                name: alida-vector-config
-            - name: tmp
-              emptyDir: {}
-```
+Generic Kubernetes manifests are available in
+[`deploy/kubernetes`](../deploy/kubernetes). Copy them into your deployment
+repository and replace the placeholder image digest, config, and secret values
+there.
 
 Use `concurrencyPolicy: Forbid` so the scheduler does not start overlapping crawls. Alida also takes per-index PostgreSQL advisory locks, which protects against manual or multi-cluster overlap.

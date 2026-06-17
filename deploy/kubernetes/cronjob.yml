@@ -1,0 +1,60 @@
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: alida-vector
+spec:
+  schedule: "17 * * * *"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 2
+      template:
+        spec:
+          restartPolicy: Never
+          containers:
+            - name: alida-vector
+              image: ghcr.io/OWNER/alida-vector@sha256:REPLACE_WITH_IMAGE_DIGEST
+              imagePullPolicy: IfNotPresent
+              args:
+                - crawl
+                - --config
+                - /config/alida.yml
+              env:
+                - name: JAVA_TOOL_OPTIONS
+                  value: "-XX:MaxRAMPercentage=75.0"
+                - name: ALIDA_DATABASE_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: alida-vector
+                      key: database-url
+                - name: ALIDA_DATABASE_USER
+                  valueFrom:
+                    secretKeyRef:
+                      name: alida-vector
+                      key: database-user
+                - name: ALIDA_DATABASE_PASSWORD
+                  valueFrom:
+                    secretKeyRef:
+                      name: alida-vector
+                      key: database-password
+                - name: OPENAI_API_KEY
+                  valueFrom:
+                    secretKeyRef:
+                      name: alida-vector
+                      key: openai-api-key
+                - name: ALIDA_SLACK_WEBHOOK_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: alida-vector
+                      key: slack-webhook-url
+                      optional: true
+              volumeMounts:
+                - name: config
+                  mountPath: /config
+                  readOnly: true
+          volumes:
+            - name: config
+              configMap:
+                name: alida-vector-config

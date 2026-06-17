@@ -1,0 +1,19 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: alida-vector-config
+data:
+  alida.yml: |
+    storage:
+      metadata:
+        type: postgres
+        jdbc_url: ${ALIDA_DATABASE_URL}
+        user: ${ALIDA_DATABASE_USER}
+        password: ${ALIDA_DATABASE_PASSWORD}
+      vectors:
+        type: pgvector
+
+    verification:
+      enabled: false
+
+    indexes: []
