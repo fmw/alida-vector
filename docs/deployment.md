@@ -2,14 +2,18 @@
 
 Alida Vector is designed to run as a scheduled batch job. The Docker image contains the application jar, the `alida-vector` wrapper, a Java 21 runtime, Chromium, and Chromedriver for browser-backed source connectors.
 
-## Build the image
+## Build the Image
 
-Build the jar first, then build the image:
+The Dockerfile builds the application jar in a builder stage and copies only the
+jar plus runtime wrapper into the final image:
 
 ```bash
-bb build
 docker build -t alida-vector:local .
 ```
+
+Base images are pinned by digest. Refresh those digests intentionally during
+dependency maintenance so a rebuild cannot silently pick up a retargeted base
+tag.
 
 Use your registry tag when building for deployment:
 
@@ -17,7 +21,22 @@ Use your registry tag when building for deployment:
 docker build -t registry.example.com/alida-vector:2026-06-11 .
 ```
 
-The image runs `crawl --config /config/alida.yml` by default. Pass explicit command arguments to override the default.
+The image runs as a non-root `alida` user. The default command is:
+
+```bash
+alida-vector crawl --config /config/alida.yml
+```
+
+Pass explicit command arguments to override the default:
+
+```bash
+docker run --rm alida-vector:local help
+docker run --rm -v "$PWD/config:/config:ro" alida-vector:local migrate --config /config/alida.yml
+docker run --rm -v "$PWD/config:/config:ro" alida-vector:local crawl --config /config/alida.yml
+```
+
+Mount a config file or directory at `/config`. The image also creates writable
+`/var/cache/alida-vector` and `/tmp/alida-vector` directories for runtime use.
 
 ## Runtime Environment
 
@@ -44,6 +63,10 @@ Container-specific environment variables:
 - `CHROMEDRIVER_BIN`: Chromedriver binary path.
 
 ## Kubernetes CronJob Example
+
+Run `migrate` during deployment before scheduling recurring crawls, or use an
+init job controlled by your deployment system. The recurring CronJob should run
+`crawl` against mounted config and injected secrets.
 
 ```yaml
 apiVersion: batch/v1
