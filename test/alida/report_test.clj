@@ -120,12 +120,12 @@
 
 (deftest slack-block-commands-include-config-path-when-known
   (let [blocks (:slack_blocks (report/build (assoc summary
-                                                   :config_path "/config/alida.yml"
+                                                   :config_path "/config/staging config's $(unsafe).yml"
                                                    :verification_verdict "caution"
                                                    :verification {:llm_verdict "caution"})))
         text (str/join "\n" (keep #(get-in % [:text :text]) blocks))]
-    (is (str/includes? text "`alida-vector report --config /config/alida.yml 018c9099-041d-7f5b-9b65-5b8f08f8e61d`"))
-    (is (str/includes? text "`alida-vector activate --config /config/alida.yml 018c9099-041d-7f5b-9b65-5b8f08f8e61d --allow-caution`"))))
+    (is (str/includes? text "`alida-vector report --config '/config/staging config'\\''s $(unsafe).yml' '018c9099-041d-7f5b-9b65-5b8f08f8e61d'`"))
+    (is (str/includes? text "`alida-vector activate --config '/config/staging config'\\''s $(unsafe).yml' '018c9099-041d-7f5b-9b65-5b8f08f8e61d' '--allow-caution'`"))))
 
 (deftest slack-blocks-truncate-change-lists
   (let [many-added (mapv (fn [n]

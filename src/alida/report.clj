@@ -109,13 +109,17 @@
   [& parts]
   (str "`" (str/join " " parts) "`"))
 
+(defn- shell-quote
+  [value]
+  (str "'" (str/replace (str value) "'" "'\\''") "'"))
+
 (defn- cli-command
   [summary subcommand & args]
   (let [config-path (:config_path summary)
         parts (cond-> ["alida-vector" subcommand]
                 (seq (str/trim (or config-path "")))
-                (conj "--config" config-path))]
-    (apply command (concat parts args))))
+                (conj "--config" (shell-quote config-path)))]
+    (apply command (concat parts (map shell-quote args)))))
 
 (defn- short-run-id
   [run-id]
