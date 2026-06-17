@@ -8,7 +8,8 @@
    :verification {:provider "openai"
                   :model "gpt-4.1-mini"
                   :api_key "test-key"}
-   :notifications {:slack_webhook_url "https://example.test/slack"}
+   :notifications {:slack_webhook_url "https://example.test/slack"
+                   :label "staging"}
    :indexes [{:name "docs"
               :auto_activate true
               :embedding {:provider "openai"
@@ -79,6 +80,9 @@
   (testing "credentials_path is treated as configuration, not a resolved secret value"
     (is (not= (config/structural-config-hash (assoc-in valid-config [:indexes 0 :embedding :credentials_path] "/tmp/a.json"))
               (config/structural-config-hash (assoc-in valid-config [:indexes 0 :embedding :credentials_path] "/tmp/b.json"))))))
+
+(deftest notification-label-loads
+  (is (= "staging" (get-in (load-from-map valid-config) [:notifications :label]))))
 
 (deftest storage-metadata-is-normalized-to-database-config
   (let [file (java.io.File/createTempFile "alida-storage" ".yml")]

@@ -127,9 +127,18 @@
     (str/join \newline (map format-run runs))
     "No runs found."))
 
+(defn- notification-status
+  [notification]
+  (cond
+    (:sent notification) "sent"
+    (:skipped notification) "skipped"
+    (:status notification) (str "failed(status=" (:status notification) ")")
+    (:error notification) "failed"
+    :else "-"))
+
 (defn- format-crawled-run
-  [{:keys [run_id index_name document_count chunk_count error_count verification_verdict embedding_stats phase_stats]}]
-  (format "%s  %s  documents=%s  chunks=%s  crawl_ms=%s  fetch_ms=%s  extract_ms=%s  chunk_ms=%s  reused=%s  embedded=%s  requests=%s  reuse_ms=%s  provider_ms=%s  errors=%s  verdict=%s"
+  [{:keys [run_id index_name document_count chunk_count error_count verification_verdict embedding_stats phase_stats notification]}]
+  (format "%s  %s  documents=%s  chunks=%s  crawl_ms=%s  fetch_ms=%s  extract_ms=%s  chunk_ms=%s  reused=%s  embedded=%s  requests=%s  reuse_ms=%s  provider_ms=%s  errors=%s  verdict=%s  notification=%s"
           run_id
           index_name
           document_count
@@ -144,11 +153,15 @@
           (or (:reuse_lookup_duration_ms embedding_stats) 0)
           (or (:provider_duration_ms embedding_stats) 0)
           error_count
-          (or verification_verdict "-")))
+          (or verification_verdict "-")
+          (notification-status notification)))
 
 (defn- format-failed-index
-  [{:keys [index_name message]}]
-  (format "%s  failed: %s" index_name message))
+  [{:keys [index_name message data]}]
+  (format "%s  failed: %s  notification=%s"
+          index_name
+          message
+          (notification-status (:notification data))))
 
 (defn- query-string
   [arguments]

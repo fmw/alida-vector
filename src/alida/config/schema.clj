@@ -199,7 +199,8 @@
 
 (def Notifications
   [:map {:closed true}
-   [:slack_webhook_url {:optional true} :string]])
+   [:slack_webhook_url {:optional true} :string]
+   [:label {:optional true} :string]])
 
 (def Database
   [:map

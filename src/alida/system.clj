@@ -6,15 +6,15 @@
 (defn system-config
   [config-path]
   {:alida/config {:path config-path}
-   :alida/log {:type :console}})
+   :alida/log {:type :console-json}})
 
 (defmethod ig/init-key :alida/config
   [_ {:keys [path]}]
   (config/load-config path))
 
 (defmethod ig/init-key :alida/log
-  [_ _opts]
-  (u/start-publisher! {:type :console}))
+  [_ opts]
+  (u/start-publisher! opts))
 
 (defmethod ig/halt-key! :alida/log
   [_ stop-publisher!]
