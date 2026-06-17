@@ -99,13 +99,32 @@
     (is (str/includes? prompt "ignore previous instructions"))
     (is (str/includes? prompt "\"verdict\":\"pass|caution|fail\""))))
 
+(deftest build-prompts-batch-url-level-diff-without-dropping-entries
+  (let [prompts (verify/build-prompts
+                 {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                  :index_name "docs"
+                  :deterministic_verification {:deterministic_verdict "pass"}
+                  :diff {:summary {:removed_count 50}
+                         :removed_urls (mapv (fn [n]
+                                               {:source_id "docs"
+                                                :canonical_url (str "https://example.test/removed/" n)})
+                                             (range 50))}
+                  :max_prompt_tokens 500
+                  :documents []})
+        combined (str/join "\n" prompts)]
+    (is (< 1 (count prompts)))
+    (is (every? #(str/includes? combined
+                                (str "https:\\/\\/example.test\\/removed\\/" %))
+                (range 50)))
+    (is (str/includes? combined "\"removed_urls\":50"))))
+
 (deftest build-prompts-batches-large-document-sets
   (let [prompts (verify/build-prompts
                  {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
                   :index_name "docs"
                   :deterministic_verification {:deterministic_verdict "pass"}
                   :diff {:summary {:added_count 3}}
-                  :max_prompt_tokens 210
+                  :max_prompt_tokens 280
                   :documents [{:canonical_url "https://example.test/1"
                                :chunks [{:content "first long enough document"}]}
                               {:canonical_url "https://example.test/2"
@@ -122,7 +141,7 @@
                   :index_name "docs"
                   :deterministic_verification {:deterministic_verdict "pass"}
                   :diff {:summary {:changed_count 1}}
-                  :max_prompt_tokens 310
+                  :max_prompt_tokens 390
                   :documents [{:canonical_url "https://example.test/large"
                                :chunks [{:content "alpha marker one"}
                                         {:content (apply str (repeat 45 "middle "))}
@@ -158,7 +177,7 @@
                                       {:source_id "docs"
                                        :canonical_url (str "https://example.test/removed/" n)})
                                     (range 500))}
-         :max_prompt_tokens 200
+         :max_prompt_tokens 10
          :documents []}))))
 
 (deftest parse-structured-verdict-validates-verdict
