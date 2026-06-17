@@ -86,7 +86,8 @@
   (retry/with-retries sys
                       (merge {:max_retries default-max-retries
                               :retry_initial_ms default-retry-initial-ms
-                              :retry_jitter_ms default-retry-jitter-ms}
+                              :retry_jitter_ms default-retry-jitter-ms
+                              :operation "embedding-provider"}
                              provider-cfg)
                       f))
 

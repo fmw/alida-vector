@@ -14,6 +14,7 @@
             [alida.vector.pgvector :as pgvector]
             [alida.verify :as verify]
             [clojure.string :as str]
+            [com.brunobonacci.mulog :as u]
             [com.climate.claypoole :as cp]
             [next.jdbc :as jdbc])
   (:import [java.net URI]))
@@ -311,11 +312,21 @@
 
 (defn process-source
   [sys index-cfg source-cfg]
+  (u/log ::source-start
+         :index-name (:name index-cfg)
+         :source-id (:id source-cfg)
+         :source-type (:type source-cfg))
   (let [source-started (now-ns)
         discover-started (now-ns)
         discovered (source/discover sys source-cfg)
         discover-duration-ms (elapsed-ms discover-started)
         unique-discovered (dedupe-discovered discovered)
+        _ (u/log ::source-discovered
+                 :index-name (:name index-cfg)
+                 :source-id (:id source-cfg)
+                 :discovered-count (count discovered)
+                 :unique-discovered-count (count unique-discovered)
+                 :duration-ms discover-duration-ms)
         processing-started (now-ns)
         results (process-discovered-items sys index-cfg source-cfg unique-discovered)
         processing-duration-ms (elapsed-ms processing-started)
@@ -333,6 +344,13 @@
                                  :max_concurrency (source-concurrency source-cfg)
                                  :inter_request_delay_ms (source-inter-request-delay-ms source-cfg)}
                                 item-stats)]
+    (u/log ::source-complete
+           :index-name (:name index-cfg)
+           :source-id (:id source-cfg)
+           :documents (count documents)
+           :chunks (reduce + 0 (map (comp count :chunks) documents))
+           :errors (count errors)
+           :duration-ms (:source_duration_ms crawl-stats))
     {:source_cfg source-cfg
      :discovered_count (count discovered)
      :unique_discovered_count (count unique-discovered)
@@ -374,6 +392,9 @@
   (let [started (now-ns)
         chunks (all-chunks source-results)
         fingerprint (embed/fingerprint (:embedding index-cfg))
+        _ (u/log ::embedding-start
+                 :index-name (:name index-cfg)
+                 :chunks (count chunks))
         reuse-started (now-ns)
         reusable-by-hash (db/reusable-embeddings ds
                                                  (embedding-dimensions index-cfg)
@@ -422,6 +443,13 @@
                :reuse_lookup_duration_ms reuse-lookup-duration-ms
                :provider_duration_ms provider-duration-ms
                :duration_ms (elapsed-ms started)}]
+    (u/log ::embedding-complete
+           :index-name (:name index-cfg)
+           :chunks (:chunk_count stats)
+           :reused (:reused_chunk_count stats)
+           :embedded (:embedded_chunk_count stats)
+           :requests (:embedding_request_count stats)
+           :duration-ms (:duration_ms stats))
     {:source-results source-results
      :stats stats}))
 
@@ -542,6 +570,11 @@
                                      :diff run-diff
                                      :documents (verification-documents source-results run-diff)
                                      :max_prompt_tokens (:max_prompt_tokens verification-cfg)})]
+                       (u/log ::verification-start
+                              :index-name (:index_name run)
+                              :run-id (:id run)
+                              :prompt-count (count prompts)
+                              :deterministic-verdict (:deterministic_verdict deterministic-verification))
                        (combined-llm-result
                         (mapv (fn [index prompt]
                                 (when (and (pos? index)
@@ -550,9 +583,22 @@
                                   (retry/sleep! sys
                                                 (or (:inter_prompt_delay_ms verification-cfg)
                                                     verify/default-inter-prompt-delay-ms)))
+                                (u/log ::verification-prompt-start
+                                       :index-name (:index_name run)
+                                       :run-id (:id run)
+                                       :prompt-number (inc index)
+                                       :prompt-count (count prompts))
                                 (verify/complete-with-retries sys verification-cfg prompt))
                               (range)
                               prompts))))
+        _ (if llm-result
+            (u/log ::verification-complete
+                   :index-name (:index_name run)
+                   :run-id (:id run)
+                   :llm-verdict (:verdict llm-result))
+            (u/log ::verification-disabled
+                   :index-name (:index_name run)
+                   :run-id (:id run)))
         final-verdict (if llm-result
                         (verify/strictest-verdict
                          (:deterministic_verdict deterministic-verification)
@@ -612,20 +658,27 @@
             run (db/create-run! ds
                                 index-cfg
                                 structural-config-hash
-                                {:embedding_fingerprint (embed/fingerprint (:embedding index-cfg))
-                                 :embedding_provider (get-in index-cfg [:embedding :provider])
-                                 :embedding_disabled (= "noop" (get-in index-cfg [:embedding :provider]))})]
+                                 {:embedding_fingerprint (embed/fingerprint (:embedding index-cfg))
+                                  :embedding_provider (get-in index-cfg [:embedding :provider])
+                                  :embedding_disabled (= "noop" (get-in index-cfg [:embedding :provider]))})]
+        (u/log ::index-start
+               :index-name (:name index-cfg)
+               :run-id (:id run)
+               :source-count (count (:sources index-cfg)))
         (try
+          (u/log ::phase-start :index-name (:name index-cfg) :run-id (:id run) :phase "crawling")
           (db/update-run-status! ds (:id run) "crawling")
           (let [crawl-started (now-ns)
                 source-results (mapv #(process-source sys index-cfg %) (:sources index-cfg))
                 crawl-duration-ms (elapsed-ms crawl-started)
                 crawl-stats (dissoc (aggregate-stats (map :crawl_stats source-results))
                                     :max_concurrency)]
+            (u/log ::phase-start :index-name (:name index-cfg) :run-id (:id run) :phase "embedding")
             (db/update-run-status! ds (:id run) "embedding")
             (pgvector/create-run-partition! ds (embedding-dimensions index-cfg) (:id run))
             (let [{:keys [source-results stats]} (attach-embeddings sys ds index-cfg source-results)
                   persist-started (now-ns)]
+              (u/log ::phase-start :index-name (:name index-cfg) :run-id (:id run) :phase "persisting")
               (persist-results! ds run index-cfg structural-config-hash source-results)
               ;; Build the HNSW index once the partition is fully loaded.
               (pgvector/create-run-index! ds (embedding-dimensions index-cfg) (:id run))
@@ -640,6 +693,10 @@
                                "verifying"
                                {:metadata {:embedding_stats stats
                                            :phase_stats phase-stats-before-verification}})
+                    _ (u/log ::phase-start
+                             :index-name (:name index-cfg)
+                             :run-id (:id run)
+                             :phase "verifying")
                     run-diff (compute-and-save-diff! ds verifying)
                     partial-summary (crawl-summary verifying
                                                    source-results
@@ -690,15 +747,38 @@
                                            verification)
                     built-report (report/build summary)
                     _ (db/save-report! ds (:id run) built-report)
+                    _ (u/log ::notification-start
+                             :index-name (:name index-cfg)
+                             :run-id (:id run))
                     notification (slack/post-report! sys built-report)]
+                (u/log ::index-complete
+                       :index-name (:name index-cfg)
+                       :run-id (:id run)
+                       :verdict (:verification_verdict final-run)
+                       :notification-sent (:sent notification))
                 (assoc summary :notification notification))))
           (catch Exception e
-            (throw (ex-info (or (ex-message e) "Crawl failed")
-                            (assoc (or (ex-data e) {})
-                                   :type :alida.crawl/index-failed
-                                   :run-id (:id run)
-                                   :index-name (:name index-cfg))
-                            (fail-run! ds run e)))))))))
+            (let [failure-data (assoc (or (ex-data e) {})
+                                      :type :alida.crawl/index-failed
+                                      :run-id (:id run)
+                                      :index-name (:name index-cfg))
+                  cause (fail-run! ds run e)
+                  failure-text (report/failure-summary
+                                {:run_id (:id run)
+                                 :index_name (:name index-cfg)
+                                 :message (or (ex-message e) "Crawl failed")
+                                 :data failure-data})
+                  notification (slack/post-text! sys failure-text)]
+              (u/log ::index-failed
+                     :index-name (:name index-cfg)
+                     :run-id (:id run)
+                     :message (or (ex-message e) (str e))
+                     :status (:status failure-data)
+                     :error-type (:type failure-data)
+                     :notification-sent (:sent notification))
+              (throw (ex-info (or (ex-message e) "Crawl failed")
+                              failure-data
+                              cause)))))))))
 
 (defn- failed-index
   [index-cfg e]

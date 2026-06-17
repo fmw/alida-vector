@@ -64,6 +64,20 @@
     (is (str/includes? (:slack_summary built) "deterministic=caution"))
     (is (str/includes? (:slack_summary built) "verdict=-"))))
 
+(deftest builds-failure-summary-with-action
+  (let [text (report/failure-summary
+              {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+               :index_name "docs"
+               :message "Verification provider request failed with HTTP 429"
+               :data {:status 429
+                      :retryable true
+                      :type :alida.verify/http-error}})]
+    (is (str/includes? text "Alida Vector crawl failed"))
+    (is (str/includes? text "status=429"))
+    (is (str/includes? text "rate-limited"))
+    (is (not (str/includes? text "headers")))
+    (is (not (str/includes? text "body")))))
+
 (deftest builds-slack-blocks
   (let [blocks (:slack_blocks (report/build (assoc summary
                                                    :verification_verdict "caution"
