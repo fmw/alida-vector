@@ -31,14 +31,15 @@
     (str "[" (str/trim notification_label) "] ")))
 
 (defn slack-summary
-  [{:keys [run_id index_name document_count chunk_count error_count embedding_stats phase_stats] :as summary}]
+  [{:keys [run_id index_name document_count chunk_count error_count skipped_count embedding_stats phase_stats] :as summary}]
   (str (label-prefix summary)
-       (format "%s run %s: documents=%s, chunks=%s, errors=%s, added=%s, removed=%s, changed=%s, moved=%s, reused=%s, embedded=%s, crawl_ms=%s, deterministic=%s, llm=%s, verdict=%s"
+       (format "%s run %s: documents=%s, chunks=%s, errors=%s, skipped=%s, added=%s, removed=%s, changed=%s, moved=%s, reused=%s, embedded=%s, crawl_ms=%s, deterministic=%s, llm=%s, verdict=%s"
                index_name
                run_id
                (value document_count)
                (value chunk_count)
                (value error_count)
+               (value skipped_count)
                (diff-count summary :added_count)
                (diff-count summary :removed_count)
                (diff-count summary :changed_count)
@@ -174,11 +175,12 @@
           (diff-count summary :moved_count)))
 
 (defn- content-summary
-  [document-count chunk-count error-count]
-  (format "%s docs / %s chunks / %s errors"
+  [document-count chunk-count error-count skipped-count]
+  (format "%s docs / %s chunks / %s errors / %s skipped"
           (value document-count)
           (value chunk-count)
-          (value error-count)))
+          (value error-count)
+          (value skipped-count)))
 
 (defn- embedding-summary
   [embedding-stats]
@@ -188,8 +190,8 @@
           (value (:embedding_request_count embedding-stats))))
 
 (defn- summary-fields
-  [summary document-count chunk-count error-count embedding-stats]
-  [(field "Content" (content-summary document-count chunk-count error-count))
+  [summary document-count chunk-count error-count skipped-count embedding-stats]
+  [(field "Content" (content-summary document-count chunk-count error-count skipped-count))
    (field "Changes" (change-summary summary))
    (field "Embeddings" (embedding-summary embedding-stats))])
 
@@ -283,7 +285,7 @@
         (slack-change-detail-text summary)))
 
 (defn slack-blocks
-  [{:keys [run_id index_name lifecycle_status document_count chunk_count error_count
+  [{:keys [run_id index_name lifecycle_status document_count chunk_count error_count skipped_count
            embedding_stats phase_stats] :as summary}]
   (let [final-verdict (verdict summary)]
     (vec
@@ -308,7 +310,7 @@
                          (seq (label-prefix summary))
                          (conj (field "Label" (:notification_label summary))))}
               {:type "section"
-               :fields (summary-fields summary document_count chunk_count error_count embedding_stats)}
+               :fields (summary-fields summary document_count chunk_count error_count skipped_count embedding_stats)}
               (slack-change-detail-blocks summary)
               {:type "section"
                :fields [(field "Crawl time" (str (ms phase_stats :crawl_duration_ms) " ms"))
@@ -321,13 +323,14 @@
                                  (str/join "\n" (map #(str "- " %) (action-commands summary))))}}]))))
 
 (defn- source-line
-  [{:keys [source_cfg document_count chunk_count error_count crawl_stats embedding_stats]}]
-  (format "- %s (%s): documents=%s, chunks=%s, errors=%s, fetch_ms=%s, extract_ms=%s, chunk_ms=%s, reused=%s, embedded=%s"
+  [{:keys [source_cfg document_count chunk_count error_count skipped_count crawl_stats embedding_stats]}]
+  (format "- %s (%s): documents=%s, chunks=%s, errors=%s, skipped=%s, fetch_ms=%s, extract_ms=%s, chunk_ms=%s, reused=%s, embedded=%s"
           (:id source_cfg)
           (:type source_cfg)
           (value document_count)
           (value chunk_count)
           (value error_count)
+          (value skipped_count)
           (value (:fetch_duration_ms crawl_stats))
           (value (:extract_duration_ms crawl_stats))
           (value (:chunk_duration_ms crawl_stats))
@@ -367,7 +370,7 @@
   (str "- " entry))
 
 (defn full-report
-  [{:keys [run_id index_name lifecycle_status source_count document_count chunk_count error_count
+  [{:keys [run_id index_name lifecycle_status source_count document_count chunk_count error_count skipped_count
            embedding_stats phase_stats sources diff deterministic_verification verification]
     :as summary}]
   (str/join
@@ -382,7 +385,8 @@
               (str "Sources: " (value source_count))
               (str "Documents: " (value document_count))
               (str "Chunks: " (value chunk_count))
-              (str "Errors: " (value error_count))])
+              (str "Errors: " (value error_count))
+              (str "Skipped: " (value skipped_count))])
             (str/join
              \newline
              ["Deterministic Gate"

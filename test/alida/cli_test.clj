@@ -236,6 +236,7 @@
                                                  :document_count 2
                                                  :chunk_count 3
                                                  :error_count 0
+                                                 :skipped_count 1
                                                  :verification_verdict nil
                                                  :notification {:sent true}}]
                                     :failed []})]
@@ -243,6 +244,7 @@
           (is (= 0 (:exit-code result)))
           (is (str/includes? (:message result) "1 succeeded, 0 failed"))
           (is (str/includes? (:message result) "docs"))
+          (is (str/includes? (:message result) "skipped=1"))
           (is (str/includes? (:message result) "verdict=-"))
           (is (str/includes? (:message result) "notification=sent")))))))
 

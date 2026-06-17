@@ -246,13 +246,21 @@
             heading (.selectFirst document "h1")]
         (some-> heading .text str/trim not-empty))))
 
+(defn- article-response
+  [sys url]
+  (let [response (source/request! sys {:method :get :url url
+                                       :headers {"Accept" article-accept-header}})]
+    (if (= 406 (:status response))
+      (source/request! sys {:method :get :url url
+                            :headers {"Accept" "application/json"}})
+      response)))
+
 (defn- fetch-article
   [sys source-cfg ctx ref]
   (let [id (:article_id ref)
         url (article-api-url ctx id)
         canonical-url (or (:canonical_url ref) (article-url ctx id))
-        response (source/request! sys {:method :get :url url
-                                       :headers {"Accept" article-accept-header}})]
+        response (article-response sys url)]
     (if (source/successful-status? (:status response))
       {:source_id (:id source-cfg)
        :source_type (:type source-cfg)
@@ -263,11 +271,17 @@
        :body (:body response)
        :hrefs (mapv #(article-url ctx %)
                     (article-links sys source-cfg canonical-url (:body response)))}
-      (source/fetch-anomaly response
-                            {:type :alida.source.jira-service-management/article-fetch-failed
-                             :source-id (:id source-cfg)
-                             :canonical-url canonical-url
-                             :article-id id}))))
+      (if (= 404 (:status response))
+        (source/skipped {:type :alida.source.jira-service-management/article-not-found
+                         :source-id (:id source-cfg)
+                         :canonical-url canonical-url
+                         :article-id id
+                         :status (:status response)})
+        (source/fetch-anomaly response
+                              {:type :alida.source.jira-service-management/article-fetch-failed
+                               :source-id (:id source-cfg)
+                               :canonical-url canonical-url
+                               :article-id id})))))
 
 (defn- enqueue-refs
   [source-cfg ctx queued refs page]
@@ -584,6 +598,9 @@
   (if (= :webdriver (crawl-method source-cfg))
     (webdriver/fetch-rendered sys (webdriver-source-cfg source-cfg) discovered-item)
     (cond
+      (source/skipped? discovered-item)
+      discovered-item
+
       (source/anomaly? discovered-item)
       discovered-item
 
