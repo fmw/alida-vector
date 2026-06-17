@@ -76,7 +76,7 @@ indexes:
         project_id: alida-dev
         # Optional outside Google Cloud. When omitted, GCS uses Application
         # Default Credentials from the runtime environment.
-        credentials_path: ${ALIDA_GCS_CREDENTIALS_PATH}
+        # credentials_path: ${ALIDA_GCS_CREDENTIALS_PATH}
         prefix: fixtures/docs/
         include_globs:
           - fixtures/docs/**/*.html
