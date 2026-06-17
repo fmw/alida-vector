@@ -8,6 +8,7 @@
         metosin/malli {:mvn/version "0.20.1"}
         clj-commons/clj-yaml {:mvn/version "1.0.29"}
         com.brunobonacci/mulog {:mvn/version "0.10.1"}
+        com.brunobonacci/mulog-adv-console {:mvn/version "0.10.1"}
         tick/tick {:mvn/version "1.0.1"}
 
         migratus/migratus {:mvn/version "1.6.6"}

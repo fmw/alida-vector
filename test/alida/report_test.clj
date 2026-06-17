@@ -64,6 +64,16 @@
     (is (str/includes? (:slack_summary built) "deterministic=caution"))
     (is (str/includes? (:slack_summary built) "verdict=-"))))
 
+(deftest slack-summary-includes-notification-label
+  (let [built (report/build (assoc summary
+                                   :notification_label "staging"
+                                   :verification_verdict "caution"))]
+    (is (str/starts-with? (:slack_summary built) "[staging] docs run"))
+    (is (= "⚠️ [staging] Alida Vector crawl needs review"
+           (get-in (:slack_blocks built) [0 :text :text])))
+    (is (some #(str/includes? % "staging")
+              (mapcat (fn [block] (map :text (:fields block))) (:slack_blocks built))))))
+
 (deftest builds-failure-summary-with-action
   (let [text (report/failure-summary
               {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
@@ -77,6 +87,13 @@
     (is (str/includes? text "rate-limited"))
     (is (not (str/includes? text "headers")))
     (is (not (str/includes? text "body")))))
+
+(deftest failure-summary-includes-notification-label
+  (let [text (report/failure-summary
+              {:index_name "docs"
+               :message "boom"
+               :data {:notification_label "prod"}})]
+    (is (str/starts-with? text "[prod] Alida Vector crawl failed"))))
 
 (deftest builds-slack-blocks
   (let [blocks (:slack_blocks (report/build (assoc summary
