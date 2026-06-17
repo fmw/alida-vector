@@ -505,9 +505,10 @@
       (persist-source! tx run index-cfg structural-config-hash source-result))))
 
 (defn- crawl-summary
-  [run source-results embedding-stats phase-stats run-diff deterministic-verification verification]
+  [run config-path source-results embedding-stats phase-stats run-diff deterministic-verification verification]
   {:run_id (:id run)
    :index_name (:index_name run)
+   :config_path config-path
    :lifecycle_status (:lifecycle_status run)
    :verification_verdict (:verification_verdict run)
    :diff run-diff
@@ -722,7 +723,9 @@
                              :run-id (:id run)
                              :phase "verifying")
                     run-diff (compute-and-save-diff! ds verifying)
+                    config-path (get-in sys [:alida/config :alida.config/path])
                     partial-summary (crawl-summary verifying
+                                                   config-path
                                                    source-results
                                                    stats
                                                    phase-stats-before-verification
@@ -763,6 +766,7 @@
                                 (db/activate-run! ds (:id completed))
                                 completed)
                     summary (crawl-summary final-run
+                                           config-path
                                            source-results
                                            stats
                                            phase-stats
