@@ -2,5 +2,9 @@
 
 !bin/
 !bin/alida-vector
-!target/
-!target/alida-vector.jar
+!build.clj
+!deps.edn
+!resources/
+!resources/**
+!src/
+!src/**
