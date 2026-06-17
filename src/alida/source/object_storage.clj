@@ -3,7 +3,7 @@
             [clojure.java.io :as io]
             [clojure.string :as str])
   (:import [java.io InputStream]
-           [java.nio.file FileSystems Paths]))
+           [java.net URI]))
 
 (def default-max-pages 1000)
 
@@ -141,11 +141,47 @@
 
 (defn canonical-url
   [scheme bucket key]
-  (str scheme "://" bucket "/" key))
+  (.toASCIIString (URI. scheme bucket (str "/" key) nil)))
 
-(defn- path-matcher
+(def regex-special-chars
+  #{\. \( \) \+ \| \^ \$ \@ \% \& \{ \} \[ \] \\})
+
+(defn- append-quoted-char
+  [^StringBuilder builder ch]
+  (if (contains? regex-special-chars ch)
+    (.append builder (str "\\" ch))
+    (.append builder ch)))
+
+(defn- glob-regex
   [glob]
-  (.getPathMatcher (FileSystems/getDefault) (str "glob:" glob)))
+  (let [builder (StringBuilder.)
+        chars (vec (str glob))
+        length (count chars)]
+    (loop [i 0]
+      (when (< i length)
+        (let [ch (nth chars i)
+              next-ch (when (< (inc i) length) (nth chars (inc i)))]
+          (cond
+            (and (= \* ch) (= \* next-ch))
+            (do
+              (.append builder ".*")
+              (recur (+ i 2)))
+
+            (= \* ch)
+            (do
+              (.append builder "[^/]*")
+              (recur (inc i)))
+
+            (= \? ch)
+            (do
+              (.append builder "[^/]")
+              (recur (inc i)))
+
+            :else
+            (do
+              (append-quoted-char builder ch)
+              (recur (inc i)))))))
+    (re-pattern (str "^" builder "$"))))
 
 (defn- glob-variants
   [glob]
@@ -164,8 +200,8 @@
 
 (defn glob-matches?
   [glob key]
-  (let [path (Paths/get key (make-array String 0))]
-    (some #(when (.matches (path-matcher %) path) true)
+  (let [key (str key)]
+    (some #(when (re-matches (glob-regex %) key) true)
           (glob-variants glob))))
 
 (defn object-included?
