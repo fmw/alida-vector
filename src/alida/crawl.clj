@@ -107,12 +107,12 @@
             {:document (retained-document document)
              :chunks chunks
              :crawl_stats crawl-stats}
-            {:error {:type :alida.crawl/empty-document
-                     :source_id (:id source-cfg)
-                     :canonical_url (:canonical_url fetched)
-                     :title (:title document)
-                     :locale (:locale document)
-                     :normalized_content_hash (:normalized_content_hash document)}
+            {:skipped {:type :alida.crawl/empty-document
+                       :source_id (:id source-cfg)
+                       :canonical_url (:canonical_url fetched)
+                       :title (:title document)
+                       :locale (:locale document)
+                       :normalized_content_hash (:normalized_content_hash document)}
              :empty_or_short_document true
              :crawl_stats crawl-stats}))))
     (catch Exception e
@@ -121,8 +121,15 @@
 
 (defn- process-discovered
   [sys index-cfg source-cfg gate-for-item discovered-item]
-  (if (source/anomaly? discovered-item)
+  (cond
+    (source/skipped? discovered-item)
+    {:skipped (merge {:source_id (:id source-cfg)}
+                     (:alida/skipped discovered-item))}
+
+    (source/anomaly? discovered-item)
     {:error (error-details discovered-item {:source_id (:id source-cfg)})}
+
+    :else
     (try
       (when-let [fetch-gate (gate-for-item discovered-item)]
         (fetch-gate))
@@ -134,9 +141,14 @@
               {:error (error-details fetched {:source_id (:id source-cfg)
                                               :canonical_url (:canonical_url discovered-item)})
                :crawl_stats {:fetch_duration_ms fetch-duration-ms}}
-              (update (process-fetched index-cfg source-cfg fetched)
-                      :crawl_stats
-                      #(merge-with + {:fetch_duration_ms fetch-duration-ms} (or % {})))))
+              (if (source/skipped? fetched)
+                {:skipped (merge {:source_id (:id source-cfg)
+                                  :canonical_url (:canonical_url discovered-item)}
+                                 (:alida/skipped fetched))
+                 :crawl_stats {:fetch_duration_ms fetch-duration-ms}}
+                (update (process-fetched index-cfg source-cfg fetched)
+                        :crawl_stats
+                        #(merge-with + {:fetch_duration_ms fetch-duration-ms} (or % {}))))))
           (catch Exception e
             {:error (error-details e {:source_id (:id source-cfg)
                                       :canonical_url (:canonical_url discovered-item)})
@@ -335,6 +347,7 @@
                        (dedupe-documents-by-external-id source-cfg)
                        (dedupe-documents-by-content source-cfg))
         errors (mapv :error (filter :error results))
+        skipped (mapv :skipped (filter :skipped results))
         empty-or-short-count (count (filter :empty_or_short_document results))
         item-stats (aggregate-stats (map :crawl_stats results))
         crawl-stats (merge-with +
@@ -350,6 +363,7 @@
            :documents (count documents)
            :chunks (reduce + 0 (map (comp count :chunks) documents))
            :errors (count errors)
+           :skipped (count skipped)
            :duration-ms (:source_duration_ms crawl-stats))
     {:source_cfg source-cfg
      :discovered_count (count discovered)
@@ -359,10 +373,12 @@
      :document_count (count documents)
      :chunk_count (reduce + 0 (map (comp count :chunks) documents))
      :error_count (count errors)
+     :skipped_count (count skipped)
      :empty_or_short_document_count empty-or-short-count
      :crawl_stats crawl-stats
      :documents documents
-     :errors errors}))
+     :errors errors
+     :skipped skipped}))
 
 (defn- embedding-dimensions
   [index-cfg]
@@ -460,9 +476,11 @@
    :processed_document_count (:processed_document_count source-result)
    :deduped_document_count (:deduped_document_count source-result)
    :chunk_count (:chunk_count source-result)
+   :skipped_count (:skipped_count source-result)
    :crawl_stats (:crawl_stats source-result)
    :embedding_stats (:embedding_stats source-result)
-   :errors (:errors source-result)})
+   :errors (:errors source-result)
+   :skipped (:skipped source-result)})
 
 (defn- persist-source!
   [tx run index-cfg structural-config-hash source-result]
@@ -499,6 +517,7 @@
    :document_count (reduce + 0 (map :document_count source-results))
    :chunk_count (reduce + 0 (map :chunk_count source-results))
    :error_count (reduce + 0 (map :error_count source-results))
+   :skipped_count (reduce + 0 (map :skipped_count source-results))
    :empty_or_short_document_count (reduce + 0 (map :empty_or_short_document_count source-results))
    :embedding_stats embedding-stats
    :phase_stats phase-stats
@@ -507,6 +526,7 @@
                                    :document_count
                                    :chunk_count
                                    :error_count
+                                   :skipped_count
                                    :empty_or_short_document_count
                                    :crawl_stats
                                    :embedding_stats])

@@ -142,11 +142,19 @@
                          {:changed_count changed-count
                           :previous_document_count previous-count}))))
 
+(defn- item-count
+  [crawl-summary]
+  (let [document-count (:document_count crawl-summary 0)
+        error-count (:error_count crawl-summary 0)
+        skipped-count (:skipped_count crawl-summary 0)]
+    (+ document-count error-count skipped-count)))
+
 (defn- check-max-item-failure-percentage
   [threshold crawl-summary]
   (let [document-count (:document_count crawl-summary 0)
         error-count (:error_count crawl-summary 0)
-        item-count (+ document-count error-count)
+        skipped-count (:skipped_count crawl-summary 0)
+        item-count (item-count crawl-summary)
         actual (ratio error-count item-count)]
     (when (and (some? threshold)
                actual
@@ -156,14 +164,16 @@
                          threshold
                          {:document_count document-count
                           :error_count error-count
+                          :skipped_count skipped-count
                           :item_count item-count}))))
 
 (defn- check-max-empty-or-short-document-percentage
   [threshold crawl-summary]
   (let [document-count (:document_count crawl-summary 0)
         error-count (:error_count crawl-summary 0)
+        skipped-count (:skipped_count crawl-summary 0)
         empty-or-short-count (:empty_or_short_document_count crawl-summary 0)
-        item-count (+ document-count error-count)
+        item-count (item-count crawl-summary)
         actual (ratio empty-or-short-count item-count)]
     (when (and (some? threshold)
                actual
@@ -173,6 +183,7 @@
                          threshold
                          {:document_count document-count
                           :error_count error-count
+                          :skipped_count skipped-count
                           :empty_or_short_document_count empty-or-short-count
                           :item_count item-count}))))
 

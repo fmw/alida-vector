@@ -35,6 +35,15 @@
   (and (map? value)
        (contains? value :alida/error)))
 
+(defn skipped
+  [details]
+  {:alida/skipped details})
+
+(defn skipped?
+  [value]
+  (and (map? value)
+       (contains? value :alida/skipped)))
+
 (defn request!
   [sys request]
   (let [request-fn (or (:alida/http-request sys) http/request)]

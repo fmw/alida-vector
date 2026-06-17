@@ -127,6 +127,45 @@
            (mapv :canonical_url items))
         "a /rest/ viewUrl must not leak into the canonical URL")))
 
+(deftest api-skips-articles-that-negotiate-to-not-found
+  (let [requests (atom [])
+        article-url "https://example.atlassian.net/rest/servicedesk/knowledgebase/latest/articles/view/1001"
+        sys {:alida/http-request
+             (fn [{:keys [url headers] :as request}]
+               (swap! requests conj request)
+               (cond
+                 (= url "https://example.atlassian.net/servicedesk/customer/portal/1")
+                 {:status 200 :body (portal-page)}
+
+                 (= url (category-url))
+                 {:status 200 :body (rest-view-category-response)}
+
+                 (and (= url article-url)
+                      (= "text/html" (get headers "Accept")))
+                 {:status 406
+                  :headers {"Content-Type" "application/problem+json"}
+                  :body (json/write-str {:status 406
+                                         :detail "Acceptable representations: [application/json]"})}
+
+                 (and (= url article-url)
+                      (= "application/json" (get headers "Accept")))
+                 {:status 404
+                  :headers {"Content-Type" "application/json"}
+                  :body (json/write-str {:httpStatusCode 404
+                                         :message "The knowledge base article could not be found."})}
+
+                 :else
+                 {:status 500 :body "unexpected request"}))}
+        items (source/discover sys source-cfg)]
+    (is (= 1 (count items)))
+    (is (source/skipped? (first items)))
+    (is (= :alida.source.jira-service-management/article-not-found
+           (get-in (first items) [:alida/skipped :type])))
+    (is (= ["text/html" "application/json"]
+           (->> @requests
+                (filter #(= article-url (:url %)))
+                (mapv #(get-in % [:headers "Accept"])))))))
+
 (deftest api-fails-loudly-when-start-url-exposes-no-categories
   (let [portals-page (str "<html><body>"
                           "<script>window.api = '/gateway/api/jsd-apollo-stargate/sharded/workspace/"
