@@ -189,6 +189,10 @@
    [:access_token {:optional true} :string]
    [:api_key {:optional true} :string]
    [:max_prompt_tokens {:optional true} :int]
+   [:max_retries {:optional true} :int]
+   [:retry_initial_ms {:optional true} :int]
+   [:retry_jitter_ms {:optional true} :int]
+   [:inter_prompt_delay_ms {:optional true} :int]
    [:prompt_policy_version {:optional true} :string]
    [:deterministic_gate_version {:optional true} :string]
    [:deterministic_thresholds {:optional true} DeterministicThresholds]])

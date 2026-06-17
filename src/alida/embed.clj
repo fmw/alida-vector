@@ -1,10 +1,8 @@
 (ns alida.embed
-  (:require [clojure.data.json :as json]
+  (:require [alida.retry :as retry]
             [alida.text :as text]
-            [hato.client :as http])
-  (:import [java.io IOException]
-           [java.time Instant ZonedDateTime]
-           [java.time.format DateTimeFormatter]))
+            [clojure.data.json :as json]
+            [hato.client :as http]))
 
 (def default-max-batch-size 96)
 (def default-max-retries 3)
@@ -69,50 +67,6 @@
              :request-timeout default-request-timeout-ms}
             request))))
 
-(defn sleep!
-  [sys millis]
-  (if-let [sleep-fn (:alida/sleep sys)]
-    (sleep-fn millis)
-    (java.util.concurrent.locks.LockSupport/parkNanos (* (long millis) 1000000))))
-
-(defn- random-int
-  [sys bound]
-  (if-let [random-int-fn (:alida/random-int sys)]
-    (random-int-fn bound)
-    (rand-int bound)))
-
-(defn retryable-status?
-  [status]
-  (or (= 429 status)
-      (<= 500 status 599)))
-
-(defn retryable-exception?
-  [e]
-  (or (:retryable (ex-data e))
-      (instance? IOException e)))
-
-(defn- header-value
-  [headers k]
-  (or (get headers k)
-      (get headers (.toLowerCase k))
-      (get headers (.toUpperCase k))))
-
-(defn- parse-long-safe
-  [value]
-  (try
-    (Long/parseLong (str value))
-    (catch Exception _ nil)))
-
-(defn retry-after-ms
-  [headers]
-  (when-let [value (header-value headers "Retry-After")]
-    (or (some-> value parse-long-safe (* 1000))
-        (try
-          (let [retry-at (.toInstant (ZonedDateTime/parse value DateTimeFormatter/RFC_1123_DATE_TIME))
-                millis (- (.toEpochMilli retry-at) (.toEpochMilli (Instant/now)))]
-            (max 0 millis))
-          (catch Exception _ nil)))))
-
 (defn request-json!
   [sys request]
   (let [response (request! sys request)
@@ -124,30 +78,17 @@
                        :status status
                        :body (:body response)
                        :headers (:headers response)
-                       :retry-after-ms (retry-after-ms (:headers response))
-                       :retryable (retryable-status? status)})))))
+                       :retry-after-ms (retry/retry-after-ms (:headers response))
+                       :retryable (retry/retryable-status? status)})))))
 
 (defn with-retries
   [sys provider-cfg f]
-  (let [max-retries (or (:max_retries provider-cfg) default-max-retries)
-        retry-initial-ms (or (:retry_initial_ms provider-cfg) default-retry-initial-ms)
-        retry-jitter-ms (or (:retry_jitter_ms provider-cfg) default-retry-jitter-ms)
-        retry-delay-ms (fn [delay-ms retry-after-ms]
-                         (+ (max delay-ms (or retry-after-ms 0))
-                            (if (pos? retry-jitter-ms)
-                              (random-int sys (inc retry-jitter-ms))
-                              0)))]
-    (letfn [(attempt [attempt-number delay-ms]
-              (try
-                (f)
-                (catch Exception e
-                  (if (and (retryable-exception? e) (< attempt-number max-retries))
-                    (do
-                      (sleep! sys (retry-delay-ms delay-ms
-                                                  (:retry-after-ms (ex-data e))))
-                      (attempt (inc attempt-number) (* 2 delay-ms)))
-                    (throw e)))))]
-      (attempt 1 retry-initial-ms))))
+  (retry/with-retries sys
+                      (merge {:max_retries default-max-retries
+                              :retry_initial_ms default-retry-initial-ms
+                              :retry_jitter_ms default-retry-jitter-ms}
+                             provider-cfg)
+                      f))
 
 (defn batches
   [provider-cfg texts]
@@ -180,9 +121,9 @@
                                             sys
                                             provider-cfg
                                             #(embed-one-batch sys provider-cfg (vec batch)))
-                             more? (seq (rest remaining))]
+                         more? (seq (rest remaining))]
                          (when (and more? (pos? inter-batch-delay-ms))
-                           (sleep! sys inter-batch-delay-ms))
+                           (retry/sleep! sys inter-batch-delay-ms))
                          (recur (rest remaining)
                                 (into result batch-result)))
                        result))]
