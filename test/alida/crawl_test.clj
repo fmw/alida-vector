@@ -90,7 +90,7 @@
     (is (every? #(= 64 (count (get-in % [:document :normalized_content_hash])))
                 (:documents result)))))
 
-(deftest process-source-records-empty-extracted-pages-as-item-errors
+(deftest process-source-records-empty-extracted-pages-as-skipped-items
   (let [file (temp-file ".html"
                         "<html lang=\"en\"><head><title>Empty</title></head>
                          <body><div></div></body></html>")
@@ -103,10 +103,27 @@
     (is (= 1 (:discovered_count result)))
     (is (= 0 (:document_count result)))
     (is (= 0 (:chunk_count result)))
-    (is (= 1 (:error_count result)))
+    (is (= 0 (:error_count result)))
+    (is (= 1 (:skipped_count result)))
     (is (= 1 (:empty_or_short_document_count result)))
-    (is (= :alida.crawl/empty-document (-> result :errors first :type)))
-    (is (= "en" (-> result :errors first :locale)))))
+    (is (= :alida.crawl/empty-document (-> result :skipped first :type)))
+    (is (= "en" (-> result :skipped first :locale)))))
+
+(deftest process-source-records-skipped-discovered-items-without-errors
+  (let [item (source/skipped {:type :example/not-found
+                              :canonical-url "https://example.test/missing"})
+        result (with-redefs [source/discover (fn [_ _] [item])]
+                 (crawl/process-source
+                  {}
+                  index-cfg
+                  {:id "fixtures"
+                   :type "test"}))]
+    (is (= 1 (:discovered_count result)))
+    (is (= 0 (:document_count result)))
+    (is (= 0 (:chunk_count result)))
+    (is (= 0 (:error_count result)))
+    (is (= 1 (:skipped_count result)))
+    (is (= :example/not-found (-> result :skipped first :type)))))
 
 (deftest process-source-deduplicates-discovered-canonical-urls
   (let [file (temp-file ".html" "<h1>Hello</h1><p>This document can be processed.</p>")

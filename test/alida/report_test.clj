@@ -33,6 +33,7 @@
    :document_count 2
    :chunk_count 3
    :error_count 1
+   :skipped_count 4
    :embedding_stats {:reused_chunk_count 2
                      :embedded_chunk_count 1
                      :embedding_request_count 1
@@ -50,6 +51,7 @@
               :document_count 2
               :chunk_count 3
               :error_count 1
+              :skipped_count 4
               :crawl_stats {:fetch_duration_ms 40
                             :extract_duration_ms 20
                             :chunk_duration_ms 10}
@@ -60,6 +62,7 @@
   (let [built (report/build summary)]
     (is (str/includes? (:slack_summary built) "docs run 018c9099-041d-7f5b-9b65-5b8f08f8e61d"))
     (is (str/includes? (:slack_summary built) "documents=2"))
+    (is (str/includes? (:slack_summary built) "skipped=4"))
     (is (str/includes? (:slack_summary built) "added=1"))
     (is (str/includes? (:slack_summary built) "deterministic=caution"))
     (is (str/includes? (:slack_summary built) "verdict=-"))))
