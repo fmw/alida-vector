@@ -97,6 +97,25 @@
                                                   :include_globs ["fixtures/docs/**/*.json"]
                                                   :exclude_globs ["fixtures/docs/private/**"])))))))
 
+(deftest discovers-gcs-objects-with-non-ascii-keys
+  (let [requests (atom [])
+        sys (fake-gcs {{:bucket "alida-gcs-fixtures"
+                        :prefix "fixtures/docs/"
+                        :max_results 1000}
+                       {:items [{:name "fixtures/docs/DE-Fortschritt_übermitteln.json"}]}}
+                      {}
+                      requests)]
+    (is (= [{:source_id "objects"
+             :source_type "gcs"
+             :canonical_url "gs://alida-gcs-fixtures/fixtures/docs/DE-Fortschritt_%C3%BCbermitteln.json"
+             :bucket "alida-gcs-fixtures"
+             :key "fixtures/docs/DE-Fortschritt_übermitteln.json"
+             :content_type "application/json"
+             :size nil
+             :etag nil}]
+           (source/discover sys (assoc source-cfg
+                                       :include_globs ["fixtures/docs/**/*.json"]))))))
+
 (deftest recursive-globs-include-direct-and-nested-children
   (let [requests (atom [])
         sys (fake-gcs {{:bucket "alida-gcs-fixtures"

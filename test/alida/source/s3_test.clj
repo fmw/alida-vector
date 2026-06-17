@@ -94,6 +94,26 @@
                                                   :include_globs ["docs/**/*.md"]
                                                   :exclude_globs ["docs/private/**"])))))))
 
+(deftest discovers-s3-objects-with-non-ascii-keys
+  (let [requests (atom [])
+        sys (fake-s3 {[:ListObjectsV2 {:Bucket "alida-fixtures"
+                                       :Prefix "docs/"
+                                       :MaxKeys 1000}]
+                      {:Contents [{:Key "docs/DE-Fortschritt_übermitteln.json"}]
+                       :IsTruncated false}}
+                     requests)]
+    (is (= [{:source_id "kb"
+             :source_type "s3"
+             :canonical_url "s3://alida-fixtures/docs/DE-Fortschritt_%C3%BCbermitteln.json"
+             :bucket "alida-fixtures"
+             :key "docs/DE-Fortschritt_übermitteln.json"
+             :content_type "application/json"
+             :size nil
+             :etag nil
+             :last_modified nil}]
+           (source/discover sys (assoc source-cfg
+                                       :include_globs ["docs/**/*.json"]))))))
+
 (deftest recursive-globs-include-direct-and-nested-children
   (let [requests (atom [])
         sys (fake-s3 {[:ListObjectsV2 {:Bucket "alida-fixtures"
