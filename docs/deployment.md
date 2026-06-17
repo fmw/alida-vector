@@ -21,6 +21,14 @@ Use your registry tag when building for deployment:
 docker build -t registry.example.com/alida-vector:2026-06-11 .
 ```
 
+The GitHub Actions image workflow publishes images to GHCR on `main` and
+version tags. Prefer deploying an immutable image digest instead of a mutable
+tag:
+
+```text
+ghcr.io/OWNER/alida-vector@sha256:...
+```
+
 The image runs as a non-root `alida` user. The default command is:
 
 ```bash
