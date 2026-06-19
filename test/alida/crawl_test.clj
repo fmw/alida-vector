@@ -389,3 +389,38 @@
         (is (= ["ok"] (mapv :index_name (:succeeded result))))
         (is (= ["broken"] (mapv :index_name (:failed result))))
         (is (= "boom" (-> result :failed first :message)))))))
+
+(deftest verification-documents-forwards-changed-and-added-page-content
+  ;; Regression: the in-memory document map has no :source_id (only attached at
+  ;; persist time), while the diff entries do. verification-documents must stamp
+  ;; the source id from source-cfg so changed/added pages match and their content
+  ;; reaches the LLM verifier instead of an empty document list.
+  (let [doc (fn [url hash]
+              {:document {:canonical_url url
+                          :title (str "Page " url)
+                          :locale "en"
+                          :normalized_content_hash hash}
+               :chunks [{:chunk_index 0
+                         :chunk_count 1
+                         :content (str "Body of " url)
+                         :content_hash hash
+                         :estimated_tokens 5}]})
+        source-results [{:source_cfg {:id "website"}
+                         :documents [(doc "https://example.com/changed/" "new-hash")
+                                     (doc "https://example.com/unchanged/" "unchanged-hash")]}]
+        run-diff {:added_urls []
+                  :removed_urls []
+                  :moved_urls []
+                  :changed_urls [{:source_id "website"
+                                  :canonical_url "https://example.com/changed/"
+                                  :locale "en"
+                                  :normalized_content_hash "new-hash"
+                                  :previous_normalized_content_hash "old-hash"
+                                  :current_normalized_content_hash "new-hash"}]}
+        documents (#'crawl/verification-documents source-results run-diff)]
+    (is (= 1 (count documents)) "only the changed page is forwarded")
+    (is (= "website" (-> documents first :source_id)))
+    (is (= "https://example.com/changed/" (-> documents first :canonical_url)))
+    (is (= ["Body of https://example.com/changed/"]
+           (mapv :content (-> documents first :chunks)))
+        "the changed page's body content is included for the verifier")))
