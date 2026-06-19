@@ -558,7 +558,15 @@
   [source-results run-diff]
   (let [wanted (current-diff-keys run-diff)]
     (->> source-results
-         (mapcat :documents)
+         (mapcat (fn [{:keys [source_cfg documents]}]
+                   ;; The in-memory document map carries :canonical_url but not
+                   ;; :source_id (the extractors never set it; it is attached from
+                   ;; source-cfg only at persist time). The diff keys, read back
+                   ;; from the DB, do include source_id, so we must stamp it on
+                   ;; here or document-key never matches and no changed/added page
+                   ;; content reaches the verifier.
+                   (map #(update % :document assoc :source_id (:id source_cfg))
+                        documents)))
          (filter #(contains? wanted (document-key (:document %))))
          (mapv verification-document))))
 
