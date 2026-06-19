@@ -8,7 +8,7 @@ The main use case is retrieval-augmented generation (RAG): keeping a chatbot or 
 
 Alida Vector is in early development. I built the first version for my own use and am using it in production, but the public project is still taking shape. The goal is to make it a reusable open-source tool.
 
-The current storage backend is pgvector. Embeddings currently use OpenAI, but the intention is to support additional embedding providers later.
+The current storage backend is PostgreSQL with pgvector. Embeddings can use OpenAI, Azure OpenAI, or Vertex AI. LLM verification supports OpenAI, Azure OpenAI, and Vertex AI. A noop embedding provider is available for crawl and extraction tuning runs.
 
 The project is written in Clojure.
 
@@ -19,17 +19,18 @@ The project is written in Clojure.
 3. Extract content and metadata.
 4. Clean and normalize content.
 5. Split large documents into embedding-sized chunks.
-6. Create embeddings.
+6. Create or reuse embeddings for changed chunks.
 7. Store documents and vectors in the vector database.
-8. Compare the new index with the previous index.
-9. Use an LLM as a sanity check on the differences between indexes.
-10. Promote the validated result to the live index.
+8. Compare the new index with the previous live index.
+9. Run deterministic diff gates and optional LLM verification on the differences.
+10. Promote the validated result to the live index, automatically or manually.
 
 ## Data sources
 
 - crawlable websites, using sitemaps and regular HTML parsing
-- JavaScript-heavy pages, especially Jira Service Management support sites, using a headless browser
-- files and structured content exports from local paths, S3, and GCS
+- Jira Service Management knowledge bases, using a fast API-backed crawler
+- JavaScript-heavy sites, using a generic headless-browser crawler
+- files and structured content exports from local paths, S3, and GCS, including JSON-to-HTML extraction
 
 ## Automate, but verify
 
