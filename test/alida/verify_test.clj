@@ -133,6 +133,45 @@
                 (range 50)))
     (is (str/includes? combined "\"removed_urls\":50"))))
 
+(deftest build-prompts-skips-diff-only-batches-for-covered-current-documents
+  (let [prompts (verify/build-prompts
+                 {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                  :index_name "docs"
+                  :deterministic_verification {:deterministic_verdict "pass"}
+                  :diff {:summary {:changed_count 1}
+                         :changed_urls [{:source_id "docs"
+                                          :canonical_url "https://example.test/changed"
+                                          :previous_normalized_content_hash "old"
+                                          :current_normalized_content_hash "new"}]}
+                  :max_prompt_tokens 1000
+                  :documents [{:source_id "docs"
+                               :canonical_url "https://example.test/changed"
+                               :chunks [{:content "changed page body"}]}]})]
+    (is (= 1 (count prompts)))
+    (is (str/includes? (first prompts) "changed page body"))))
+
+(deftest build-prompts-keeps-diff-only-batches-for-uncovered-removed-documents
+  (let [prompts (verify/build-prompts
+                 {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                  :index_name "docs"
+                  :deterministic_verification {:deterministic_verdict "pass"}
+                  :diff {:summary {:changed_count 1
+                                    :removed_count 1}
+                         :changed_urls [{:source_id "docs"
+                                          :canonical_url "https://example.test/changed"
+                                          :previous_normalized_content_hash "old"
+                                          :current_normalized_content_hash "new"}]
+                         :removed_urls [{:source_id "docs"
+                                         :canonical_url "https://example.test/removed"}]}
+                  :max_prompt_tokens 1000
+                  :documents [{:source_id "docs"
+                               :canonical_url "https://example.test/changed"
+                               :chunks [{:content "changed page body"}]}]})]
+    (is (= 2 (count prompts)))
+    (is (str/includes? (first prompts) "changed page body"))
+    (is (str/includes? (second prompts) "removed"))
+    (is (str/includes? (second prompts) "Documents for full diff validation: []"))))
+
 (deftest build-prompts-batches-large-document-sets
   (let [prompts (verify/build-prompts
                  {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
