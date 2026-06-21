@@ -410,6 +410,35 @@
                   (get diff key)))
            diff-entry-groups)))
 
+(defn- document-entry-key
+  [document]
+  [(:source_id document) (:canonical_url document)])
+
+(defn- diff-entry-current-key
+  [group entry]
+  (case group
+    (:added_urls :changed_urls) [(:source_id entry) (:canonical_url entry)]
+    :moved_urls [(:source_id entry) (:current_canonical_url entry)]
+    nil))
+
+(defn- covered-by-documents?
+  [document-keys group entry]
+  (when-let [entry-key (diff-entry-current-key group entry)]
+    (contains? document-keys entry-key)))
+
+(defn- uncovered-diff
+  [diff documents]
+  (let [document-keys (set (map document-entry-key documents))]
+    (if (seq document-keys)
+      (reduce (fn [acc {:keys [key]}]
+                (update acc key #(vec (remove (partial covered-by-documents?
+                                                       document-keys
+                                                       key)
+                                              %))))
+              diff
+              diff-entry-groups)
+      diff)))
+
 (defn- append-diff-item
   [diff-batch {:keys [group entry]}]
   (update diff-batch group (fnil conj []) entry))
@@ -498,7 +527,9 @@
                          {:kind "diff"
                           :documents []
                           :diff_batch diff-batch})
-                       (diff-batches input (:diff input) max-tokens)))
+                       (diff-batches input
+                                     (uncovered-diff (:diff input) documents)
+                                     max-tokens)))
         batches (or (seq batches)
                     [{:kind "empty"
                       :documents []
