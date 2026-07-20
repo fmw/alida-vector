@@ -43,6 +43,36 @@ alida-vector crawl --config config.yml --index docs-tuning
 alida-vector report <run-id>
 ```
 
+## Configure Verifier Model Parameters
+
+OpenAI and Azure OpenAI verification requests accept optional generation
+parameters. Alida sends `temperature: 0` when no sampling or reasoning control
+is configured. Some reasoning models only accept their default temperature;
+set `temperature: null` to omit the parameter, or set the provider-supported
+default explicitly. Configuring `reasoning_effort` or `verbosity` without a
+temperature also leaves the temperature to the provider.
+
+```yaml
+verification:
+  provider: azure-openai
+  endpoint: ${AZURE_OPENAI_ENDPOINT}
+  deployment_name: reasoning-model
+  api_key: ${AZURE_OPENAI_API_KEY}
+  temperature: 1
+  max_completion_tokens: 2048
+  reasoning_effort: low
+  verbosity: low
+```
+
+Supported parameters are `temperature` (0–2), `top_p` (0–1),
+`max_completion_tokens`, `reasoning_effort` (`none`, `minimal`, `low`,
+`medium`, `high`, or `xhigh`), and `verbosity` (`low`, `medium`, or `high`).
+Configure either `temperature` or `top_p`, not both. Model support varies; the
+provider returns an error when a configured parameter is unsupported by the
+selected model. Set `max_completion_tokens` generously for reasoning models:
+hidden reasoning tokens count against the limit and can exhaust it before the
+model emits the JSON verdict.
+
 ## Blacklist Low-Value URLs
 
 Use `denied_urls` for exact URLs that should never be indexed. Use `denied_url_prefixes` for groups of pages, such as internal search results, account flows, thank-you pages, or duplicate archive pages.

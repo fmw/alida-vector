@@ -23,11 +23,12 @@
                    :headers {"Authorization" (str "Bearer " api-key)
                              "Content-Type" "application/json"}
                    :body (json/write-str
-                          {:model model
-                           :temperature 0
-                           :response_format {:type "json_object"}
-                           :messages [{:role "system"
-                                       :content verify/system-prompt}
-                                      {:role "user"
-                                       :content prompt}]})})]
+                          (merge
+                           (verify/chat-completion-parameters provider-cfg)
+                           {:model model
+                            :response_format {:type "json_object"}
+                            :messages [{:role "system"
+                                        :content verify/system-prompt}
+                                       {:role "user"
+                                        :content prompt}]}))})]
     (verify/parse-structured-verdict (response-content response))))

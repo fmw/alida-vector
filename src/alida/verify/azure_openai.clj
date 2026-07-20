@@ -41,10 +41,11 @@
                    :headers {"api-key" api-key
                              "Content-Type" "application/json"}
                    :body (json/write-str
-                          {:temperature 0
-                           :response_format {:type "json_object"}
-                           :messages [{:role "system"
-                                       :content verify/system-prompt}
-                                      {:role "user"
-                                       :content prompt}]})})]
+                          (merge
+                           (verify/chat-completion-parameters provider-cfg)
+                           {:response_format {:type "json_object"}
+                            :messages [{:role "system"
+                                        :content verify/system-prompt}
+                                       {:role "user"
+                                        :content prompt}]}))})]
     (verify/parse-structured-verdict (response-content response))))

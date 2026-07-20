@@ -578,6 +578,64 @@ indexes:
       (finally
         (.delete file)))))
 
+(deftest verification-chat-completion-parameters-are-validated
+  (testing "supported OpenAI chat completion parameters load"
+    (let [cfg (load-from-map
+               (update valid-config
+                       :verification
+                       assoc
+                       :temperature 1
+                       :max_completion_tokens 512
+                       :reasoning_effort "low"
+                       :verbosity "low"))]
+      (is (= 1 (get-in cfg [:verification :temperature])))
+      (is (= 512 (get-in cfg [:verification :max_completion_tokens])))
+      (is (= "low" (get-in cfg [:verification :reasoning_effort])))
+      (is (= "low" (get-in cfg [:verification :verbosity])))))
+  (testing "temperature can be null to use the provider default"
+    (let [cfg (load-from-map (assoc-in valid-config [:verification :temperature] nil))]
+      (is (contains? (:verification cfg) :temperature))
+      (is (nil? (get-in cfg [:verification :temperature])))))
+  (testing "temperature and top_p are alternatives"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"temperature or top_p"
+         (load-from-map
+          (-> valid-config
+              (assoc-in [:verification :temperature] 0.5)
+              (assoc-in [:verification :top_p] 0.9))))))
+  (testing "OpenAI chat completion parameters are rejected for Vertex AI"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"does not support OpenAI chat completion parameters"
+         (load-from-map
+          (-> valid-config
+              (assoc :verification {:provider "vertex-ai"
+                                    :model "gemini-model"
+                                    :project "example-project"
+                                    :location "europe-west4"
+                                    :access_token "test-token"
+                                    :temperature 0.5}))))))
+  (doseq [[key value]
+          [[:reasoning_effort "extreme"]
+           [:verbosity "verbose"]]]
+    (testing (str "invalid " (name key) " enum fails")
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"Invalid Alida config"
+           (load-from-map (assoc-in valid-config [:verification key] value))))))
+  (doseq [[key value message]
+          [[:temperature -0.1 #"temperature must be between"]
+           [:temperature 2.1 #"temperature must be between"]
+           [:top_p -0.1 #"top_p must be between"]
+           [:top_p 1.1 #"top_p must be between"]
+           [:max_completion_tokens 0 #"max_completion_tokens must be positive"]]]
+    (testing (str "invalid " (name key) " fails")
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           message
+           (load-from-map (assoc-in valid-config [:verification key] value)))))))
+
 (deftest verification-retry-options-are-validated
   (testing "positive retry options load"
     (let [cfg (load-from-map
