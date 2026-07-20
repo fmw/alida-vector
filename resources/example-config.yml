@@ -14,6 +14,14 @@ verification:
   provider: openai
   model: gpt-4.1-mini
   api_key: ${OPENAI_API_KEY}
+  # OpenAI and Azure OpenAI default to temperature 0 for backwards
+  # compatibility. Set a number, or null to use the model's default.
+  # temperature: 1
+  # Alternative sampling control; do not configure together with temperature.
+  # top_p: 0.9
+  # max_completion_tokens: 2048
+  # reasoning_effort: low
+  # verbosity: low
   prompt_policy_version: "2026-06-08"
   deterministic_gate_version: "2026-06-08"
   deterministic_thresholds:

@@ -188,6 +188,12 @@
    [:credentials_path {:optional true} :string]
    [:access_token {:optional true} :string]
    [:api_key {:optional true} :string]
+   [:temperature {:optional true} [:maybe [:or :int :double]]]
+   [:top_p {:optional true} [:or :int :double]]
+   [:max_completion_tokens {:optional true} :int]
+   [:reasoning_effort {:optional true}
+    [:enum "none" "minimal" "low" "medium" "high" "xhigh"]]
+   [:verbosity {:optional true} [:enum "low" "medium" "high"]]
    [:max_prompt_tokens {:optional true} :int]
    [:max_retries {:optional true} :int]
    [:retry_initial_ms {:optional true} :int]

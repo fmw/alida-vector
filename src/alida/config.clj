@@ -132,7 +132,37 @@
 (defn- validate-verification-options!
   [config]
   (let [verification (:verification config)
+        provider (:provider verification)
+        temperature (:temperature verification)
+        top-p (:top_p verification)
+        max-completion-tokens (:max_completion_tokens verification)
         max-prompt-tokens (:max_prompt_tokens verification)]
+    (when (and (some? temperature) (not (<= 0.0 temperature 2.0)))
+      (throw (ex-info "Invalid verification config: temperature must be between 0.0 and 2.0"
+                      {:type :alida.config/invalid-verification-provider-config
+                       :key :temperature
+                       :value temperature})))
+    (when (and (some? top-p) (not (<= 0.0 top-p 1.0)))
+      (throw (ex-info "Invalid verification config: top_p must be between 0.0 and 1.0"
+                      {:type :alida.config/invalid-verification-provider-config
+                       :key :top_p
+                       :value top-p})))
+    (when (and (some? temperature) (some? top-p))
+      (throw (ex-info "Invalid verification config: configure temperature or top_p, not both"
+                      {:type :alida.config/invalid-verification-provider-config
+                       :keys [:temperature :top_p]})))
+    (when (and (some? max-completion-tokens) (not (pos-int? max-completion-tokens)))
+      (throw (ex-info "Invalid verification config: max_completion_tokens must be positive"
+                      {:type :alida.config/invalid-verification-provider-config
+                       :key :max_completion_tokens
+                       :value max-completion-tokens})))
+    (when (and (not (#{"openai" "azure-openai"} provider))
+               (some #(contains? verification %)
+                     [:temperature :top_p :max_completion_tokens :reasoning_effort :verbosity]))
+      (throw (ex-info (str "Invalid verification config: provider " provider
+                           " does not support OpenAI chat completion parameters")
+                      {:type :alida.config/invalid-verification-provider-config
+                       :provider provider})))
     (when (and (some? max-prompt-tokens) (not (pos-int? max-prompt-tokens)))
       (throw (ex-info "Invalid verification config: max_prompt_tokens must be positive"
                       {:type :alida.config/invalid-verification-provider-config

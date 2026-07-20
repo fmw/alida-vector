@@ -12,6 +12,24 @@
 (def default-retry-jitter-ms 0)
 (def default-inter-prompt-delay-ms 0)
 
+(def chat-completion-parameter-keys
+  [:temperature :top_p :max_completion_tokens :reasoning_effort :verbosity])
+
+(defn chat-completion-parameters
+  "Build optional OpenAI-compatible chat completion parameters. Preserve the
+   historical temperature=0 default when neither sampling control is present.
+   An explicit null temperature omits the field so a model can use its default."
+  [provider-cfg]
+  (let [configured (into {}
+                         (keep (fn [k]
+                                 (when-some [value (get provider-cfg k)]
+                                   [k value])))
+                         chat-completion-parameter-keys)]
+    (if (or (contains? provider-cfg :temperature)
+            (contains? provider-cfg :top_p))
+      configured
+      (assoc configured :temperature 0))))
+
 (def verdict-rank
   {"pass" 0
    "caution" 1
