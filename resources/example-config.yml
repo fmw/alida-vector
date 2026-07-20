@@ -14,8 +14,8 @@ verification:
   provider: openai
   model: gpt-4.1-mini
   api_key: ${OPENAI_API_KEY}
-  # OpenAI and Azure OpenAI default to temperature 0 for backwards
-  # compatibility. Set a number, or null to use the model's default.
+  # OpenAI and Azure OpenAI use temperature 0 when no generation controls are
+  # configured. Set a number, or null to use the model's default.
   # temperature: 1
   # Alternative sampling control; do not configure together with temperature.
   # top_p: 0.9

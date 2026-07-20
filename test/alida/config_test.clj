@@ -604,6 +604,26 @@ indexes:
           (-> valid-config
               (assoc-in [:verification :temperature] 0.5)
               (assoc-in [:verification :top_p] 0.9))))))
+  (testing "OpenAI chat completion parameters are rejected for Vertex AI"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"does not support OpenAI chat completion parameters"
+         (load-from-map
+          (-> valid-config
+              (assoc :verification {:provider "vertex-ai"
+                                    :model "gemini-model"
+                                    :project "example-project"
+                                    :location "europe-west4"
+                                    :access_token "test-token"
+                                    :temperature 0.5}))))))
+  (doseq [[key value]
+          [[:reasoning_effort "extreme"]
+           [:verbosity "verbose"]]]
+    (testing (str "invalid " (name key) " enum fails")
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"Invalid Alida config"
+           (load-from-map (assoc-in valid-config [:verification key] value))))))
   (doseq [[key value message]
           [[:temperature -0.1 #"temperature must be between"]
            [:temperature 2.1 #"temperature must be between"]

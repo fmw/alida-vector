@@ -46,10 +46,11 @@ alida-vector report <run-id>
 ## Configure Verifier Model Parameters
 
 OpenAI and Azure OpenAI verification requests accept optional generation
-parameters. Alida preserves its historical `temperature: 0` behavior when no
-sampling parameter is configured. Some reasoning models only accept their
-default temperature; set `temperature: null` to omit the parameter, or set the
-provider-supported default explicitly.
+parameters. Alida sends `temperature: 0` when no sampling or reasoning control
+is configured. Some reasoning models only accept their default temperature;
+set `temperature: null` to omit the parameter, or set the provider-supported
+default explicitly. Configuring `reasoning_effort` or `verbosity` without a
+temperature also leaves the temperature to the provider.
 
 ```yaml
 verification:
@@ -68,7 +69,9 @@ Supported parameters are `temperature` (0–2), `top_p` (0–1),
 `medium`, `high`, or `xhigh`), and `verbosity` (`low`, `medium`, or `high`).
 Configure either `temperature` or `top_p`, not both. Model support varies; the
 provider returns an error when a configured parameter is unsupported by the
-selected model.
+selected model. Set `max_completion_tokens` generously for reasoning models:
+hidden reasoning tokens count against the limit and can exhaust it before the
+model emits the JSON verdict.
 
 ## Blacklist Low-Value URLs
 

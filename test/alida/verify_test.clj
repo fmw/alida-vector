@@ -292,6 +292,15 @@
            :verbosity "low"})))
   (is (= {:top_p 0.25}
          (verify/chat-completion-parameters {:top_p 0.25})))
+  (is (= {:reasoning_effort "low"
+          :verbosity "low"}
+         (verify/chat-completion-parameters
+          {:reasoning_effort "low"
+           :verbosity "low"})))
+  (is (= {:temperature 0
+          :max_completion_tokens 512}
+         (verify/chat-completion-parameters
+          {:max_completion_tokens 512})))
   (is (= {}
          (verify/chat-completion-parameters {:temperature nil}))))
 
@@ -320,6 +329,39 @@
       (is (= 0 (:temperature body)))
       (is (= {:type "json_object"} (:response_format body)))
       (is (= ["system" "user"] (mapv :role (:messages body)))))))
+
+(deftest openai-complete-forwards-chat-completion-parameters
+  (let [requests (atom [])
+        sys {:alida/http-request
+             (fn [request]
+               (swap! requests conj request)
+               {:status 200
+                :body (json/write-str
+                       {:choices [{:message {:content (json/write-str
+                                                       {:verdict "pass"
+                                                        :reasoning "Looks good"
+                                                        :findings []
+                                                        :security_findings []})}}]})})}]
+    (verify/complete sys
+                     {:provider "openai"
+                      :model "reasoning-model"
+                      :api_key "test-key"
+                      :top_p 0.25
+                      :max_completion_tokens 512
+                      :reasoning_effort "low"
+                      :verbosity "low"}
+                     "verify this")
+    (let [body (json/read-str (:body (first @requests)) :key-fn keyword)]
+      (is (= {:top_p 0.25
+              :max_completion_tokens 512
+              :reasoning_effort "low"
+              :verbosity "low"}
+             (select-keys body
+                          [:top_p
+                           :max_completion_tokens
+                           :reasoning_effort
+                           :verbosity])))
+      (is (not (contains? body :temperature))))))
 
 (deftest azure-openai-complete-requests-json-verdict
   (let [requests (atom [])
