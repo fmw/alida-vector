@@ -1,4 +1,4 @@
-FROM clojure:temurin-26-tools-deps-trixie-slim@sha256:b12a02d0f5b08e5bb53be9634ba4d20cf291ed1b85b802f3c12ec638024d792d AS builder
+FROM clojure:temurin-26-tools-deps-trixie-slim@sha256:adaac09e23c97ff19010a28a6b84e670f6bd4d8459d3a8b1979ebdf58c2b737e AS builder
 
 WORKDIR /workspace
 
@@ -9,7 +9,7 @@ COPY src ./src
 COPY resources ./resources
 RUN clojure -T:build jar
 
-FROM debian:trixie-slim@sha256:4e401d95de7083948053197a9c3913343cd06b706bf15eb6a0c3ccd26f436a0e AS runtime
+FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS runtime
 
 ENV ALIDA_VECTOR_HOME=/opt/alida-vector \
     ALIDA_VECTOR_JAR=/opt/alida-vector/alida-vector.jar \
