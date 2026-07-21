@@ -2,6 +2,11 @@
 
 Before using Alida Vector for a production refresh, it is usually worth tuning the crawl configuration. The goal is to make sure the crawler indexes useful content and avoids navigation, footers, duplicate pages, forms, cookie banners, search pages, and other boilerplate.
 
+For the complete configuration hierarchy, source selection, and connector
+settings, see [Crawl Configuration](crawl-configuration.md). YAML examples in
+this guide that begin with `sources:` are fragments belonging below an index's
+`sources` key.
+
 During this tuning phase, you can save time and API cost by disabling paid embedding and LLM verification calls. This should be temporary: for production refreshes, keep real embeddings and LLM verification enabled. Even trusted sources can change unexpectedly or be compromised.
 
 ## Disable Costly API Calls
@@ -34,13 +39,15 @@ indexes:
       - id: website
         type: website
         sitemap_url: https://example.com/sitemap.xml
+        allowed_url_prefixes:
+          - https://example.com/
 ```
 
 Run the crawl as usual:
 
 ```bash
 alida-vector crawl --config config.yml --index docs-tuning
-alida-vector report <run-id>
+alida-vector report <run-id> --config config.yml
 ```
 
 ## Configure Verifier Model Parameters

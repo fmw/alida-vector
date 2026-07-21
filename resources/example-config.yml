@@ -57,6 +57,8 @@ indexes:
       - id: blog
         type: website
         sitemap_url: https://example.test/sitemap.xml
+        allowed_url_prefixes:
+          - https://example.test/
         max_sitemap_depth: 10
         inter_request_delay_ms: 100
         denied_urls:
