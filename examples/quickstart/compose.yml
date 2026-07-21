@@ -1,0 +1,32 @@
+name: alida-vector-quickstart
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_DB: alida
+      POSTGRES_USER: alida
+      POSTGRES_PASSWORD: alida
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U alida -d alida"]
+      interval: 2s
+      timeout: 5s
+      retries: 15
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+
+  alida:
+    image: ghcr.io/fmw/alida-vector:0.1.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      ALIDA_DATABASE_URL: jdbc:postgresql://postgres:5432/alida
+      ALIDA_DATABASE_USER: alida
+      ALIDA_DATABASE_PASSWORD: alida
+    volumes:
+      - ./alida.yml:/config/alida.yml:ro
+      - ./content:/content:ro
+
+volumes:
+  postgres-data:

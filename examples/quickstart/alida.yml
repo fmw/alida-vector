@@ -1,0 +1,41 @@
+storage:
+  metadata:
+    type: postgres
+    jdbc_url: ${ALIDA_DATABASE_URL}
+    user: ${ALIDA_DATABASE_USER}
+    password: ${ALIDA_DATABASE_PASSWORD}
+  vectors:
+    type: pgvector
+
+# The quickstart stays free and needs no provider credentials. Production
+# indexes should use real embeddings and enable LLM verification.
+verification:
+  enabled: false
+  deterministic_thresholds:
+    max_removed_absolute: 10
+    max_removed_percentage: 0.2
+    max_changed_percentage: 0.5
+    max_item_failure_percentage: 0.05
+    max_empty_or_short_document_percentage: 0.1
+
+indexes:
+  - name: quickstart-docs
+    auto_activate: false
+    languages:
+      allowed: [en]
+      fallback: en
+    embedding:
+      provider: noop
+      embedding_dimensions: 1536
+    chunking:
+      max_input_tokens: 8192
+      max_tokens: 1200
+      safety_multiplier: 1.2
+    sources:
+      - id: local-docs
+        type: local
+        root: /content
+        include_extensions: [html]
+        language:
+          mode: configured
+          locale: en

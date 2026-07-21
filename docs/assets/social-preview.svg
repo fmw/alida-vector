@@ -1,0 +1,41 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 640" role="img" aria-labelledby="title desc">
+  <title id="title">Alida Vector social preview</title>
+  <desc id="desc">Alida Vector logo and a concise description of its verified RAG index refresh workflow.</desc>
+
+  <rect width="1280" height="640" fill="#f4f1ea"/>
+  <circle cx="1160" cy="80" r="230" fill="#dcebe5"/>
+  <circle cx="70" cy="620" r="250" fill="#e6eee9"/>
+
+  <g transform="translate(96 105) scale(.72)">
+    <rect x="24" y="24" width="208" height="208" rx="48" fill="#087a5d"/>
+    <path d="M70 172c30-48 69-74 118-82" fill="none" stroke="#f4f1ea" stroke-width="14" stroke-linecap="round"/>
+    <circle cx="70" cy="172" r="16" fill="#f4f1ea"/>
+    <circle cx="188" cy="90" r="16" fill="#f4f1ea"/>
+    <circle cx="70" cy="172" r="6" fill="#087a5d"/>
+    <circle cx="188" cy="90" r="6" fill="#087a5d"/>
+  </g>
+
+  <text x="330" y="210" fill="#152b26" font-family="Arial, Helvetica, sans-serif" font-size="78" font-weight="700" letter-spacing="-2">Alida Vector</text>
+  <text x="334" y="270" fill="#4f6962" font-family="Arial, Helvetica, sans-serif" font-size="30">Keep RAG knowledge bases current.</text>
+
+  <g transform="translate(100 375)">
+    <rect width="1080" height="116" rx="20" fill="#fff" stroke="#d5ddd9" stroke-width="2"/>
+    <g font-family="Arial, Helvetica, sans-serif" font-size="22" font-weight="700">
+      <text x="52" y="68" fill="#087a5d">GATHER</text>
+      <text x="277" y="68" fill="#087a5d">COMPARE</text>
+      <text x="523" y="68" fill="#087a5d">VALIDATE</text>
+      <text x="789" y="68" fill="#087a5d">ACTIVATE</text>
+    </g>
+    <g fill="none" stroke="#87aa9f" stroke-width="3" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M176 59h61"/>
+      <path d="m228 51 9 8-9 8"/>
+      <path d="M415 59h68"/>
+      <path d="m474 51 9 8-9 8"/>
+      <path d="M662 59h87"/>
+      <path d="m740 51 9 8-9 8"/>
+    </g>
+  </g>
+
+  <text x="100" y="558" fill="#59706a" font-family="Arial, Helvetica, sans-serif" font-size="23">Open source · Clojure · PostgreSQL + pgvector</text>
+  <text x="1180" y="558" text-anchor="end" fill="#087a5d" font-family="Arial, Helvetica, sans-serif" font-size="23" font-weight="700">alida.dev</text>
+</svg>
