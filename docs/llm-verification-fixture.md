@@ -50,7 +50,7 @@ The crawl should complete with a final verification verdict of `caution` or `fai
 
 ```bash
 clojure -M -m alida.main runs --config dev/fixtures/llm-verification.yml --index llm-verification-fixture --limit 5
-clojure -M -m alida.main report --config dev/fixtures/llm-verification.yml <run-id>
+clojure -M -m alida.main report --config dev/fixtures/llm-verification.yml RUN_ID
 ```
 
 The config defaults to OpenAI. It also contains commented provider blocks for Azure OpenAI and Vertex AI; use environment variable placeholders and never commit real credentials.

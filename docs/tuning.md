@@ -47,7 +47,7 @@ Run the crawl as usual:
 
 ```bash
 alida-vector crawl --config config.yml --index docs-tuning
-alida-vector report <run-id> --config config.yml
+alida-vector report RUN_ID --config config.yml
 ```
 
 ## Configure Verifier Model Parameters

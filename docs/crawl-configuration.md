@@ -253,7 +253,7 @@ S3 and GCS discovery defaults to at most `1000` included objects. Configure `max
 
 ## Extraction and Cleanup
 
-`remove_selectors` removes matching elements before HTML extraction. Alida already removes scripts, styles, metadata, SVG, canvas, and iframe elements from ordinary HTML extraction. Add selectors for site-specific headers, navigation, footers, cookie dialogs, forms, and sidebars.
+`remove_selectors` removes matching elements before HTML extraction. Alida already removes `script`, `style`, `noscript`, `meta`, `link`, `svg`, `canvas`, and `iframe` elements from ordinary HTML extraction. Add selectors for site-specific headers, navigation, footers, cookie dialogs, forms, and sidebars.
 
 ```yaml
 remove_selectors:
