@@ -4,6 +4,10 @@ Alida can crawl files from local paths, Amazon S3, and Google Cloud Storage.
 These sources share the same fetch, content-type, text extraction, chunking, and
 storage pipeline as website crawls.
 
+For the complete configuration hierarchy and settings shared with other source
+types, see [Crawl Configuration](crawl-configuration.md). All YAML examples
+below are source fragments that belong below an index's `sources` key.
+
 Supported file content types are inferred from the object key or file
 extension:
 

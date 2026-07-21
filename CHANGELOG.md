@@ -2,7 +2,7 @@
 
 ## 0.1.0 - 2026-07-21
 
-First public preview of Alida Vector.
+First release of Alida Vector.
 
 - Crawl websites, JavaScript-rendered pages, Jira Service Management knowledge
   bases, local files, S3, and Google Cloud Storage.
@@ -13,5 +13,4 @@ First public preview of Alida Vector.
 - Deploy as a container or Kubernetes CronJob.
 - Try the pipeline locally with the API-key-free Docker Compose quick start.
 
-This is an early release. Configuration and CLI details may change as the
-public project develops.
+This is an early release. Configuration and CLI details may change as the project develops.
