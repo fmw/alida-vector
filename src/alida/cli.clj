@@ -21,6 +21,10 @@
     "search"
     "search-run"})
 
+(def temporary-failure-exit-code
+  "Exit status used when every failed crawl index exhausted a retryable error."
+  75)
+
 (defn- parse-duration
   [value]
   (let [value (str/trim value)]
@@ -218,6 +222,13 @@
     (map format-crawled-run succeeded)
     (map format-failed-index failed))))
 
+(defn- crawl-exit-code
+  [{:keys [failed]}]
+  (cond
+    (empty? failed) 0
+    (every? #(true? (get-in % [:data :retryable])) failed) temporary-failure-exit-code
+    :else 1))
+
 (defmulti execute
   (fn [command _sys _options _arguments] command))
 
@@ -236,7 +247,7 @@
   (let [result (with-datasource
                  sys
                  #(crawl/crawl! sys % {:index-name (:index options)}))]
-    {:exit-code (if (seq (:failed result)) 1 0)
+    {:exit-code (crawl-exit-code result)
      :message (format-crawl-result result)}))
 
 (defmethod execute "runs"

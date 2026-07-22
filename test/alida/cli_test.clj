@@ -265,6 +265,39 @@
           (is (str/includes? (:message result) "docs  failed: boom"))
           (is (str/includes? (:message result) "notification=failed(status=500)")))))))
 
+(deftest crawl-command-distinguishes-retryable-failures
+  (testing "all failures are retryable"
+    (with-system-stub
+      (fn []
+        (with-redefs [db/datasource (fn [_]
+                                      (reify java.io.Closeable
+                                        (close [_] nil)))
+                      crawl/crawl! (fn [_ _ _]
+                                     {:succeeded []
+                                      :failed [{:index_name "docs"
+                                                :message "rate limited"
+                                                :data {:status 429
+                                                       :retryable true}}]})]
+          (let [result (cli/run ["crawl" "--config" "ignored.yml"])]
+            (is (= 75 (:exit-code result))))))))
+
+  (testing "a permanent failure takes precedence over retryable failures"
+    (with-system-stub
+      (fn []
+        (with-redefs [db/datasource (fn [_]
+                                      (reify java.io.Closeable
+                                        (close [_] nil)))
+                      crawl/crawl! (fn [_ _ _]
+                                     {:succeeded []
+                                      :failed [{:index_name "temporary"
+                                                :message "rate limited"
+                                                :data {:retryable true}}
+                                               {:index_name "permanent"
+                                                :message "invalid configuration"
+                                                :data {:retryable false}}]})]
+          (let [result (cli/run ["crawl" "--config" "ignored.yml"])]
+            (is (= 1 (:exit-code result)))))))))
+
 (deftest prune-command-requires-explicit-criteria
   (with-system-stub
     (fn []

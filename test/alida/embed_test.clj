@@ -109,6 +109,32 @@
     (is (= 2 (count @requests)))
     (is (= [5] @sleeps))))
 
+(deftest exhausted-transport-errors-remain-classified-as-retryable
+  (let [responses (atom [(java.io.IOException. "connection reset")
+                         (java.io.IOException. "connection reset")])
+        requests (atom [])
+        sleeps (atom [])
+        error (try
+                (embed/embed-batch
+                 (fake-sys responses requests sleeps)
+                 {:provider "openai"
+                  :api_key "openai-key"
+                  :model "text-embedding-3-small"
+                  :max_retries 2
+                  :retry_initial_ms 5}
+                 ["a"])
+                nil
+                (catch clojure.lang.ExceptionInfo e e))]
+    (is (some? error))
+    (is (= {:retryable true
+            :retry-exhausted true
+            :attempts 2
+            :max-retries 2}
+           (select-keys (ex-data error)
+                        [:retryable :retry-exhausted :attempts :max-retries])))
+    (is (= 2 (count @requests)))
+    (is (= [5] @sleeps))))
+
 (deftest embedding-batches-can-pause-between-provider-calls
   (let [responses (atom [(json-response {:data [{:index 0 :embedding [0.1]}]})
                          (json-response {:data [{:index 0 :embedding [0.2]}]})

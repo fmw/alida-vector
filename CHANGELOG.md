@@ -1,5 +1,14 @@
 # Changelog
 
+## 0.1.1 - 2026-07-22
+
+- Return exit status `75` when every failed crawl index exhausted a retryable
+  provider or transport error, allowing an orchestrator to distinguish
+  temporary failures from permanent failures.
+- Document application-level and Kubernetes Job retry behavior.
+- Expand the Kubernetes CronJob example with one bounded retry for temporary
+  failures while failing permanent errors immediately.
+
 ## 0.1.0 - 2026-07-21
 
 First release of Alida Vector.
