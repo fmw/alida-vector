@@ -266,20 +266,20 @@
           (is (str/includes? (:message result) "notification=failed(status=500)")))))))
 
 (deftest crawl-command-distinguishes-retryable-failures
-  (with-system-stub
-    (fn []
-      (with-redefs [db/datasource (fn [_]
-                                    (reify java.io.Closeable
-                                      (close [_] nil)))
-                    crawl/crawl! (fn [_ _ _]
-                                   {:succeeded []
-                                    :failed [{:index_name "docs"
-                                              :message "rate limited"
-                                              :data {:status 429
-                                                     :retryable true}}]})]
-        (let [result (cli/run ["crawl" "--config" "ignored.yml"])]
-          (is (= cli/temporary-failure-exit-code (:exit-code result)))
-          (is (= 75 (:exit-code result)))))))
+  (testing "all failures are retryable"
+    (with-system-stub
+      (fn []
+        (with-redefs [db/datasource (fn [_]
+                                      (reify java.io.Closeable
+                                        (close [_] nil)))
+                      crawl/crawl! (fn [_ _ _]
+                                     {:succeeded []
+                                      :failed [{:index_name "docs"
+                                                :message "rate limited"
+                                                :data {:status 429
+                                                       :retryable true}}]})]
+          (let [result (cli/run ["crawl" "--config" "ignored.yml"])]
+            (is (= 75 (:exit-code result))))))))
 
   (testing "a permanent failure takes precedence over retryable failures"
     (with-system-stub

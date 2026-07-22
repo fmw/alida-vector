@@ -134,12 +134,21 @@ jobTemplate:
     backoffLimit: 1
     podFailurePolicy:
       rules:
+        - action: Ignore
+          onPodConditions:
+            - type: DisruptionTarget
         - action: FailJob
           onExitCodes:
             containerName: alida-vector
             operator: NotIn
             values: [75]
 ```
+
+Policy rules are evaluated in order. The first rule replaces a Pod marked as a
+`DisruptionTarget` (for example during a node drain) without consuming the
+application retry budget. The second rule fails permanent application errors
+immediately. Exit status `75` matches neither rule, so the Job controller counts
+it toward `backoffLimit` and retries it once.
 
 If the cluster does not support `podFailurePolicy`, `backoffLimit: 1` still
 provides one bounded retry, but it applies to every non-zero exit status.

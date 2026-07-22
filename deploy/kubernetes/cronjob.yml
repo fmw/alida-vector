@@ -13,6 +13,11 @@ spec:
       backoffLimit: 1
       podFailurePolicy:
         rules:
+          # Replace Pods lost to node drains or other disruptions without
+          # consuming the application retry budget.
+          - action: Ignore
+            onPodConditions:
+              - type: DisruptionTarget
           - action: FailJob
             onExitCodes:
               containerName: alida-vector

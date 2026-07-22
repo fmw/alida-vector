@@ -45,8 +45,10 @@ Permanent or unclassified failures exit with status `1`.
 
 The example CronJob combines `backoffLimit: 1` with a `podFailurePolicy`. This
 retries the complete crawl once for status `75` and fails the Job immediately
-for other non-zero statuses. A replacement Pod starts a new candidate run; it
-does not resume the failed crawl phase. See
+for other non-zero statuses. Pods marked as a `DisruptionTarget`, such as during
+a node drain, are replaced without consuming that application retry. A
+replacement Pod starts a new candidate run; it does not resume the failed crawl
+phase. See
 [Deployment](../../docs/deployment.md#retry-layers-and-exit-status) for the full
 behavior and fallback guidance for clusters without `podFailurePolicy` support.
 
