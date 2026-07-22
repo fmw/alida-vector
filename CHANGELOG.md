@@ -8,6 +8,8 @@
 - Document application-level and Kubernetes Job retry behavior.
 - Expand the Kubernetes CronJob example with one bounded retry for temporary
   failures while failing permanent errors immediately.
+- Update the PostgreSQL JDBC driver to 42.7.13 to address a channel-binding
+  authentication downgrade vulnerability.
 
 ## 0.1.0 - 2026-07-21
 
