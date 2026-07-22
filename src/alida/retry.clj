@@ -62,18 +62,26 @@
               (try
                 (f)
                 (catch Exception e
-                  (if (and (retryable-exception? e) (< attempt-number max-retries))
-                    (let [error-data (ex-data e)
-                          sleep-ms (retry-delay-ms delay-ms
-                                                   (:retry-after-ms error-data))]
-                      (u/log ::retry-sleep
-                             :operation operation
-                             :attempt attempt-number
-                             :max-retries max-retries
-                             :delay-ms sleep-ms
-                             :status (:status error-data)
-                             :error-type (:type error-data))
-                      (sleep! sys sleep-ms)
-                      (attempt (inc attempt-number) (* 2 delay-ms)))
+                  (if (retryable-exception? e)
+                    (if (< attempt-number max-retries)
+                      (let [error-data (ex-data e)
+                            sleep-ms (retry-delay-ms delay-ms
+                                                     (:retry-after-ms error-data))]
+                        (u/log ::retry-sleep
+                               :operation operation
+                               :attempt attempt-number
+                               :max-retries max-retries
+                               :delay-ms sleep-ms
+                               :status (:status error-data)
+                               :error-type (:type error-data))
+                        (sleep! sys sleep-ms)
+                        (attempt (inc attempt-number) (* 2 delay-ms)))
+                      (throw (ex-info (or (ex-message e) "Retryable operation failed")
+                                      (assoc (or (ex-data e) {})
+                                             :retryable true
+                                             :retry-exhausted true
+                                             :attempts attempt-number
+                                             :max-retries max-retries)
+                                      e)))
                     (throw e)))))]
       (attempt 1 retry-initial-ms))))

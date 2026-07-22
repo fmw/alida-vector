@@ -35,6 +35,26 @@ The CronJob uses `concurrencyPolicy: Forbid`. Alida also uses per-index
 PostgreSQL advisory locks, which protects against accidental overlapping crawls
 from another scheduler or manual run.
 
+## Retry Policy
+
+Alida retries transient embedding and LLM verification requests internally. A
+provider `429` may occur in either phase and does not imply that fetching source
+documents was rate-limited. If every failed index is still classified as
+retryable after those attempts, `crawl` exits with status `75` (`EX_TEMPFAIL`).
+Permanent or unclassified failures exit with status `1`.
+
+The example CronJob combines `backoffLimit: 1` with a `podFailurePolicy`. This
+retries the complete crawl once for status `75` and fails the Job immediately
+for other non-zero statuses. A replacement Pod starts a new candidate run; it
+does not resume the failed crawl phase. See
+[Deployment](../../docs/deployment.md#retry-layers-and-exit-status) for the full
+behavior and fallback guidance for clusters without `podFailurePolicy` support.
+
+Keep any deployment-specific `activeDeadlineSeconds` large enough to cover both
+Pod attempts and their backoff. Consider setting `timeZone`,
+`startingDeadlineSeconds`, and `ttlSecondsAfterFinished` explicitly in the
+deployment repository as described in the main deployment guide.
+
 The manifests rely on the container's writable filesystem for temporary and
 cache files. If your deployment sets `readOnlyRootFilesystem: true`, add
 writable volumes for the required paths and set an appropriate pod security

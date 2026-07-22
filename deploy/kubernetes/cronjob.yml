@@ -9,7 +9,15 @@ spec:
   failedJobsHistoryLimit: 3
   jobTemplate:
     spec:
-      backoffLimit: 2
+      # Retry one complete crawl only when Alida reports EX_TEMPFAIL (75).
+      backoffLimit: 1
+      podFailurePolicy:
+        rules:
+          - action: FailJob
+            onExitCodes:
+              containerName: alida-vector
+              operator: NotIn
+              values: [75]
       template:
         spec:
           restartPolicy: Never

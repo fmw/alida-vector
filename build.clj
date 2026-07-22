@@ -2,7 +2,7 @@
   (:require [clojure.tools.build.api :as b]))
 
 (def lib 'fmw/alida-vector)
-(def version "0.1.0-SNAPSHOT")
+(def version "0.1.1")
 (def class-dir "target/classes")
 (def basis (delay (b/create-basis {:project "deps.edn"})))
 (def uber-file "target/alida-vector.jar")
