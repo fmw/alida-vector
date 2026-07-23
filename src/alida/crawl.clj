@@ -842,17 +842,14 @@
                :pruned-count (:pruned_count result))
         (assoc result :max_age_days max-age-days))
       (catch Exception e
-        (u/log ::history-prune-failed
-               :index-names index-names
-               :max-age-days max-age-days
-               :message (or (ex-message e) (str e)))
-        (throw (ex-info (str "Crawl completed, but automatic history pruning failed: "
-                             (or (ex-message e) (str e)))
-                        {:type :alida.crawl/history-pruning-failed
-                         :retryable false
-                         :index-names index-names
-                         :max-age-days max-age-days}
-                        e))))))
+        (let [message (or (ex-message e) (str e))]
+          (u/log ::history-prune-failed
+                 :index-names index-names
+                 :max-age-days max-age-days
+                 :message message)
+          {:failed true
+           :message message
+           :max_age_days max-age-days})))))
 
 (defn- apply-retention!
   [sys ds indexes result]

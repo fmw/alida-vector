@@ -654,9 +654,11 @@
      (with-connection
        connectable
        (fn [conn]
-         (jdbc/execute!
-          conn
-          ["WITH ranked AS (
+         (let [index-names-array (when (some? index-names)
+                                   (text-array conn index-names))]
+           (jdbc/execute!
+            conn
+            ["WITH ranked AS (
         SELECT r.*,
                row_number() OVER (
                  PARTITION BY r.index_name
@@ -669,7 +671,8 @@
       )
       SELECT id, index_name, lifecycle_status, embedding_dimensions, started_at, finished_at
       FROM ranked
-      WHERE id IS DISTINCT FROM live_run_id
+      WHERE (?::text[] IS NULL OR index_name = ANY(?::text[]))
+        AND id IS DISTINCT FROM live_run_id
         AND id IS DISTINCT FROM previous_live_run_id
         AND lifecycle_status = ANY(?)
         AND (?::integer IS NULL OR index_rank > ?)
@@ -678,13 +681,15 @@
              OR COALESCE((metadata->>'embedding_disabled')::boolean, false) = true
              OR metadata->>'embedding_provider' = 'noop')
       ORDER BY index_name, started_at"
-          (text-array conn pruneable-lifecycle-statuses)
-          keep-last
-          keep-last
-          older-than
-          older-than
-          (boolean disabled-embeddings)]
-          jdbc-opts)))
+             index-names-array
+             index-names-array
+             (text-array conn pruneable-lifecycle-statuses)
+             keep-last
+             keep-last
+             older-than
+             older-than
+             (boolean disabled-embeddings)]
+            jdbc-opts))))
      index-names)))
 
 (defn- prune-run!

@@ -102,7 +102,11 @@ their run reference cleared by the database foreign key.
 Automatic pruning is skipped when any selected index fails, so it cannot
 interfere with status `75` retry handling. If pruning itself fails after a
 successful crawl, `crawl` returns status `1`; completed or activated runs are
-not rolled back. The next scheduled crawl can attempt pruning again.
+not rolled back, and their successful summaries remain in the command output.
+The example Kubernetes `podFailurePolicy` treats status `1` as permanent, so
+the next scheduled crawl can attempt pruning again. A scheduler that retries
+every non-zero status can instead repeat the completed crawl; use a
+status-aware retry policy or disable whole-Job retries when that is undesirable.
 
 Manual pruning remains available for one-off cleanup and supports additional
 criteria:

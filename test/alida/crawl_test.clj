@@ -443,15 +443,14 @@
                   crawl/crawl-index! (fn [_ _ index-cfg]
                                        {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
                                         :index_name (:name index-cfg)})]
-      (try
-        (crawl/crawl! sys :ignored {})
-        (is false "Expected automatic history pruning to fail")
-        (catch clojure.lang.ExceptionInfo e
-          (is (= :alida.crawl/history-pruning-failed
-                 (:type (ex-data e))))
-          (is (false? (:retryable (ex-data e))))
-          (is (= ["docs"] (:index-names (ex-data e))))
-          (is (str/includes? (ex-message e) "database unavailable")))))))
+      (let [result (crawl/crawl! sys :ignored {})]
+        (is (= ["docs"] (mapv :index_name (:succeeded result))))
+        (is (= []
+               (:failed result)))
+        (is (= {:failed true
+                :message "database unavailable"
+                :max_age_days 30}
+               (:pruning result)))))))
 
 (deftest verification-documents-forwards-changed-and-added-page-content
   ;; Regression: the in-memory document map has no :source_id (only attached at

@@ -274,6 +274,30 @@
           (is (str/includes? (:message result) "docs  failed: boom"))
           (is (str/includes? (:message result) "notification=failed(status=500)")))))))
 
+(deftest crawl-command-preserves-summary-when-automatic-pruning-fails
+  (with-system-stub
+    (fn []
+      (with-redefs [db/datasource (fn [_]
+                                    (reify java.io.Closeable
+                                      (close [_] nil)))
+                    crawl/crawl! (fn [_ _ _]
+                                   {:succeeded [{:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                                                 :index_name "docs"
+                                                 :document_count 2
+                                                 :chunk_count 3
+                                                 :error_count 0
+                                                 :notification {:sent true}}]
+                                    :failed []
+                                    :pruning {:failed true
+                                              :message "database unavailable"
+                                              :max_age_days 30}})]
+        (let [result (cli/run ["crawl" "--config" "ignored.yml"])]
+          (is (= 1 (:exit-code result)))
+          (is (str/includes? (:message result) "1 succeeded, 0 failed"))
+          (is (str/includes? (:message result) "018c9099-041d-7f5b-9b65-5b8f08f8e61d"))
+          (is (str/includes? (:message result)
+                             "History pruning failed after successful crawls: database unavailable")))))))
+
 (deftest crawl-command-distinguishes-retryable-failures
   (testing "all failures are retryable"
     (with-system-stub

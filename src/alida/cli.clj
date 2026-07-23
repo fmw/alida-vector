@@ -212,9 +212,15 @@
     "Pruned 0 runs."))
 
 (defn- format-automatic-pruning
-  [{:keys [pruned_count skipped max_age_days]}]
-  (if skipped
+  [{:keys [failed message pruned_count skipped max_age_days]}]
+  (cond
+    failed
+    (format "History pruning failed after successful crawls: %s" message)
+
+    skipped
     "History pruning skipped because one or more indexes failed."
+
+    :else
     (format "History pruning removed %s runs older than %s days."
             pruned_count
             max_age_days)))
@@ -232,8 +238,9 @@
     (when pruning [(format-automatic-pruning pruning)]))))
 
 (defn- crawl-exit-code
-  [{:keys [failed]}]
+  [{:keys [failed pruning]}]
   (cond
+    (and (empty? failed) (:failed pruning)) 1
     (empty? failed) 0
     (every? #(true? (get-in % [:data :retryable])) failed) temporary-failure-exit-code
     :else 1))
