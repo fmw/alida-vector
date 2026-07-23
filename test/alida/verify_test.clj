@@ -22,6 +22,14 @@
    :alida/sleep (fn [millis]
                   (swap! sleeps conj millis))})
 
+(defn- prompt-json-section
+  [prompt label]
+  (let [prefix (str label ": ")]
+    (some (fn [section]
+            (when (str/starts-with? section prefix)
+              (json/read-str (subs section (count prefix)) :key-fn keyword)))
+          (str/split prompt #"\n\n"))))
+
 (deftest deterministic-gate-passes-when-thresholds-are-not-exceeded
   (is (= {:deterministic_verdict "pass"
           :deterministic_findings []}
@@ -150,6 +158,64 @@
     (is (= 1 (count prompts)))
     (is (str/includes? (first prompts) "changed page body"))))
 
+(deftest build-prompts-classifies-diffs-represented-by-current-documents
+  (let [prompts (verify/build-prompts
+                 {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                  :index_name "docs"
+                  :deterministic_verification {:deterministic_verdict "pass"}
+                  :diff {:summary {:added_count 2
+                                   :changed_count 1
+                                   :moved_count 1}
+                         :added_urls [{:source_id "docs"
+                                       :canonical_url "https://example.test/added"}
+                                      {:source_id "docs"
+                                       :canonical_url "https://example.test/moved"}]
+                         :changed_urls [{:source_id "docs"
+                                        :canonical_url "https://example.test/changed"
+                                        :previous_normalized_content_hash "old-hash"
+                                        :current_normalized_content_hash "new-hash"}]
+                         :moved_urls [{:source_id "docs"
+                                      :previous_canonical_url "https://example.test/previous"
+                                      :current_canonical_url "https://example.test/moved"}]}
+                  :max_prompt_tokens 2000
+                  :documents [{:source_id "docs"
+                               :canonical_url "https://example.test/added"
+                               :chunks [{:content "added page body"}]}
+                              {:source_id "docs"
+                               :canonical_url "https://example.test/changed"
+                               :chunks [{:content "changed page body"}]}
+                              {:source_id "docs"
+                               :canonical_url "https://example.test/moved"
+                               :chunks [{:content "moved page body"}]}]})
+        prompt (first prompts)
+        prompt-diff (prompt-json-section
+                     prompt
+                     "Diff summary and this batch of URL-level diff entries")
+        documents (prompt-json-section prompt "Documents for full diff validation")
+        documents-by-url (into {} (map (juxt :canonical_url identity)) documents)]
+    (is (= 1 (count prompts)))
+    (is (= {:added 2
+            :changed 1
+            :moved 1}
+           (:document_diff_entry_counts prompt-diff)))
+    (is (every? empty? (vals (:batch_entries prompt-diff))))
+    (is (str/includes? prompt
+                       "Empty batch_entries is valid when documents are present"))
+    (is (= [{:classification "added"}]
+           (get-in documents-by-url
+                   ["https://example.test/added" :diff_entries])))
+    (is (= [{:previous_normalized_content_hash "old-hash"
+             :current_normalized_content_hash "new-hash"
+             :classification "changed"}]
+           (get-in documents-by-url
+                   ["https://example.test/changed" :diff_entries])))
+    (is (= [{:classification "added"}
+            {:previous_canonical_url "https://example.test/previous"
+             :current_canonical_url "https://example.test/moved"
+             :classification "moved"}]
+           (get-in documents-by-url
+                   ["https://example.test/moved" :diff_entries])))))
+
 (deftest build-prompts-keeps-diff-only-batches-for-uncovered-removed-documents
   (let [prompts (verify/build-prompts
                  {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
@@ -178,7 +244,7 @@
                   :index_name "docs"
                   :deterministic_verification {:deterministic_verdict "pass"}
                   :diff {:summary {:added_count 3}}
-                  :max_prompt_tokens 280
+                  :max_prompt_tokens 400
                   :documents [{:canonical_url "https://example.test/1"
                                :chunks [{:content "first long enough document"}]}
                               {:canonical_url "https://example.test/2"
@@ -195,7 +261,7 @@
                   :index_name "docs"
                   :deterministic_verification {:deterministic_verdict "pass"}
                   :diff {:summary {:changed_count 1}}
-                  :max_prompt_tokens 390
+                  :max_prompt_tokens 520
                   :documents [{:canonical_url "https://example.test/large"
                                :chunks [{:content "alpha marker one"}
                                         {:content (apply str (repeat 45 "middle "))}
