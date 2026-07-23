@@ -263,11 +263,24 @@
   [diff-batch]
   (every? empty? (vals diff-batch)))
 
+(def document-diff-count-keys
+  {"added" :added_urls
+   "changed" :changed_urls
+   "moved" :moved_urls})
+
 (defn- document-diff-entry-counts
   [documents]
-  (frequencies
-   (keep :classification
-         (mapcat #(or (:diff_entries %) []) documents))))
+  (->> documents
+       (mapcat (fn [document]
+                 (map (fn [entry]
+                        [(:source_id document)
+                         (:canonical_url document)
+                         (:classification entry)])
+                      (:diff_entries document))))
+       distinct
+       (keep (fn [[_source-id _canonical-url classification]]
+               (get document-diff-count-keys classification)))
+       frequencies))
 
 (def diff-batch-contract
   (str "Diff batch contract: summary and total_counts cover the whole run. "

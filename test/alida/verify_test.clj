@@ -194,9 +194,9 @@
         documents (prompt-json-section prompt "Documents for full diff validation")
         documents-by-url (into {} (map (juxt :canonical_url identity)) documents)]
     (is (= 1 (count prompts)))
-    (is (= {:added 2
-            :changed 1
-            :moved 1}
+    (is (= {:added_urls 2
+            :changed_urls 1
+            :moved_urls 1}
            (:document_diff_entry_counts prompt-diff)))
     (is (every? empty? (vals (:batch_entries prompt-diff))))
     (is (str/includes? prompt
@@ -215,6 +215,25 @@
              :classification "moved"}]
            (get-in documents-by-url
                    ["https://example.test/moved" :diff_entries])))))
+
+(deftest build-prompt-deduplicates-diff-counts-for-document-fragments
+  (let [fragment {:source_id "docs"
+                  :canonical_url "https://example.test/large"
+                  :diff_entries [{:classification "changed"}]}
+        prompt (verify/build-prompt
+                {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                 :index_name "docs"
+                 :deterministic_verification {:deterministic_verdict "pass"}
+                 :diff {:summary {:changed_count 1}
+                        :changed_urls [{:source_id "docs"
+                                        :canonical_url "https://example.test/large"}]}
+                 :documents [(assoc fragment :chunks [{:content "first fragment"}])
+                             (assoc fragment :chunks [{:content "second fragment"}])]})
+        prompt-diff (prompt-json-section
+                     prompt
+                     "Diff summary and this batch of URL-level diff entries")]
+    (is (= {:changed_urls 1}
+           (:document_diff_entry_counts prompt-diff)))))
 
 (deftest build-prompts-keeps-diff-only-batches-for-uncovered-removed-documents
   (let [prompts (verify/build-prompts
@@ -244,6 +263,7 @@
                   :index_name "docs"
                   :deterministic_verification {:deterministic_verdict "pass"}
                   :diff {:summary {:added_count 3}}
+                  ;; Accommodate fixed prompt metadata while still forcing multiple document batches.
                   :max_prompt_tokens 400
                   :documents [{:canonical_url "https://example.test/1"
                                :chunks [{:content "first long enough document"}]}
@@ -261,6 +281,7 @@
                   :index_name "docs"
                   :deterministic_verification {:deterministic_verdict "pass"}
                   :diff {:summary {:changed_count 1}}
+                  ;; Fit each chunk fragment while still forcing the whole document to split.
                   :max_prompt_tokens 520
                   :documents [{:canonical_url "https://example.test/large"
                                :chunks [{:content "alpha marker one"}
