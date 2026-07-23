@@ -637,18 +637,26 @@
    ["SELECT * FROM alida_reports WHERE run_id = ?" (run-id value)]
    jdbc-opts))
 
+(defn- restrict-prune-candidates
+  [candidates index-names]
+  (let [selected (set index-names)]
+    (if (nil? index-names)
+      candidates
+      (filterv #(contains? selected (:index_name %)) candidates))))
+
 (defn prune-candidate-runs
-  [connectable {:keys [keep-last older-than disabled-embeddings]}]
+  [connectable {:keys [keep-last older-than disabled-embeddings index-names]}]
   (require-prune-criteria! {:keep-last keep-last
                             :older-than older-than
                             :disabled-embeddings disabled-embeddings})
   (let [older-than (timestamp older-than)]
-    (with-connection
-      connectable
-      (fn [conn]
-        (jdbc/execute!
-         conn
-         ["WITH ranked AS (
+    (restrict-prune-candidates
+     (with-connection
+       connectable
+       (fn [conn]
+         (jdbc/execute!
+          conn
+          ["WITH ranked AS (
         SELECT r.*,
                row_number() OVER (
                  PARTITION BY r.index_name
@@ -676,7 +684,8 @@
           older-than
           older-than
           (boolean disabled-embeddings)]
-         jdbc-opts)))))
+          jdbc-opts)))
+     index-names)))
 
 (defn- prune-run!
   [tx opts run]
@@ -693,7 +702,11 @@
                                  :lifecycle_status (:lifecycle_status run)
                                  :embedding_dimensions (:embedding_dimensions run)
                                  :partition partition-name
-                                 :criteria (select-keys opts [:keep-last :older-than :disabled-embeddings])}})
+                                 :criteria (select-keys opts
+                                                        [:keep-last
+                                                         :older-than
+                                                         :disabled-embeddings
+                                                         :index-names])}})
     (assoc run :partition partition-name)))
 
 (defn prune-runs!

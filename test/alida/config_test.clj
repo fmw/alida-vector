@@ -84,6 +84,18 @@
 (deftest notification-label-loads
   (is (= "staging" (get-in (load-from-map valid-config) [:notifications :label]))))
 
+(deftest retention-config-loads-and-validates
+  (is (= 30
+         (get-in (load-from-map (assoc valid-config
+                                      :retention {:max_age_days 30}))
+                 [:retention :max_age_days])))
+  (doseq [value [0 -1]]
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"max_age_days must be positive"
+         (load-from-map (assoc valid-config
+                              :retention {:max_age_days value}))))))
+
 (deftest storage-metadata-is-normalized-to-database-config
   (let [file (java.io.File/createTempFile "alida-storage" ".yml")]
     (try

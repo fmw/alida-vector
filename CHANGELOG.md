@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+- Add opt-in age-based crawl-history retention after successful crawls.
+- Allow manual pruning to be limited to one index with `--index`.
+
 ## 0.1.1 - 2026-07-22
 
 - Return exit status `75` when every failed crawl index exhausted a retryable

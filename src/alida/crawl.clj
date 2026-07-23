@@ -17,7 +17,8 @@
             [com.brunobonacci.mulog :as u]
             [com.climate.claypoole :as cp]
             [next.jdbc :as jdbc])
-  (:import [java.net URI]))
+  (:import [java.net URI]
+           [java.time Duration Instant]))
 
 (def default-source-concurrency 20)
 (def default-inter-request-delay-ms 0)
@@ -825,16 +826,63 @@
    :message (or (ex-message e) (str e))
    :data (ex-data e)})
 
+(defn- prune-history!
+  [ds indexes max-age-days]
+  (let [index-names (mapv :name indexes)
+        older-than (.minus (Instant/now) (Duration/ofDays max-age-days))]
+    (u/log ::history-prune-start
+           :index-names index-names
+           :max-age-days max-age-days)
+    (try
+      (let [result (db/prune-runs! ds {:older-than older-than
+                                       :index-names index-names})]
+        (u/log ::history-prune-complete
+               :index-names index-names
+               :max-age-days max-age-days
+               :pruned-count (:pruned_count result))
+        (assoc result :max_age_days max-age-days))
+      (catch Exception e
+        (u/log ::history-prune-failed
+               :index-names index-names
+               :max-age-days max-age-days
+               :message (or (ex-message e) (str e)))
+        (throw (ex-info (str "Crawl completed, but automatic history pruning failed: "
+                             (or (ex-message e) (str e)))
+                        {:type :alida.crawl/history-pruning-failed
+                         :retryable false
+                         :index-names index-names
+                         :max-age-days max-age-days}
+                        e))))))
+
+(defn- apply-retention!
+  [sys ds indexes result]
+  (if-let [max-age-days (get-in sys [:alida/config :retention :max_age_days])]
+    (if (seq (:failed result))
+      (do
+        (u/log ::history-prune-skipped
+               :reason "crawl-failed"
+               :failed-index-count (count (:failed result))
+               :max-age-days max-age-days)
+        (assoc result :pruning {:skipped true
+                                :reason :crawl-failed
+                                :max_age_days max-age-days}))
+      (assoc result :pruning (prune-history! ds indexes max-age-days)))
+    result))
+
 (defn crawl!
   [sys ds {:keys [index-name]}]
   (db/reconcile-orphaned-runs! ds)
   (let [indexes (run/selected-indexes sys index-name)]
-    (reduce
-     (fn [result index-cfg]
-       (try
-         (update result :succeeded conj (crawl-index! sys ds index-cfg))
-         (catch Exception e
-           (update result :failed conj (failed-index index-cfg e)))))
-     {:succeeded []
-      :failed []}
-     indexes)))
+    (apply-retention!
+     sys
+     ds
+     indexes
+     (reduce
+      (fn [result index-cfg]
+        (try
+          (update result :succeeded conj (crawl-index! sys ds index-cfg))
+          (catch Exception e
+            (update result :failed conj (failed-index index-cfg e)))))
+      {:succeeded []
+       :failed []}
+      indexes))))

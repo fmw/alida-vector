@@ -165,3 +165,7 @@ alida-vector prune --config config.yml --disabled-embeddings --older-than 7d
 ```
 
 The prune command protects live runs, previous live runs, and in-progress runs. For disabled-embedding tuning runs, it removes the run data and drops the per-run vector partition.
+
+Use `--index NAME` to limit manual pruning to one index. For recurring
+production cleanup, see the opt-in
+[crawl history retention](deployment.md#crawl-history-retention) setting.

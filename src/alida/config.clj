@@ -184,6 +184,16 @@
                        :value v}))))
   config)
 
+(defn- validate-retention!
+  [config]
+  (when-let [max-age-days (get-in config [:retention :max_age_days])]
+    (when-not (pos-int? max-age-days)
+      (throw (ex-info "Invalid retention config: max_age_days must be positive"
+                      {:type :alida.config/invalid-retention
+                       :key :max_age_days
+                       :value max-age-days}))))
+  config)
+
 (defn- validate-positive-embedding-options!
   [index]
   (let [embedding (:embedding index)]
@@ -482,6 +492,7 @@
                    validate-storage!
                    validate-vector-dimensions!
                    validate-deterministic-thresholds!
+                   validate-retention!
                    validate-required-verification-keys!
                    validate-verification-options!
                    validate-indexes!)]

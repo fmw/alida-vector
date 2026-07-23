@@ -34,6 +34,12 @@ verification:
 notifications:
   slack_webhook_url: ${ALIDA_SLACK_WEBHOOK_URL}
 
+# Optional. When omitted, Alida keeps crawl history until it is pruned manually.
+# After every fully successful crawl, remove eligible non-live runs for the
+# selected indexes when they are older than this many days.
+# retention:
+#   max_age_days: 30
+
 indexes:
   - name: support-knowledge-base
     auto_activate: true
