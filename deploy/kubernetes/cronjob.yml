@@ -2,6 +2,7 @@ apiVersion: batch/v1
 kind: CronJob
 metadata:
   name: alida-vector
+  namespace: alida-vector
 spec:
   schedule: "17 * * * *"
   concurrencyPolicy: Forbid
@@ -25,11 +26,32 @@ spec:
               values: [75]
       template:
         spec:
+          automountServiceAccountToken: false
           restartPolicy: Never
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 10001
+            runAsGroup: 10001
+            fsGroup: 10001
+            fsGroupChangePolicy: OnRootMismatch
+            seccompProfile:
+              type: RuntimeDefault
           containers:
             - name: alida-vector
-              image: ghcr.io/OWNER/alida-vector@sha256:REPLACE_WITH_IMAGE_DIGEST
+              image: ghcr.io/fmw/alida-vector@sha256:REPLACE_WITH_IMAGE_DIGEST
               imagePullPolicy: IfNotPresent
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: [ALL]
+              resources:
+                requests:
+                  cpu: 250m
+                  memory: 512Mi
+                limits:
+                  cpu: "2"
+                  memory: 2Gi
               args:
                 - crawl
                 - --config
@@ -37,6 +59,8 @@ spec:
               env:
                 - name: JAVA_TOOL_OPTIONS
                   value: "-XX:MaxRAMPercentage=75.0"
+                - name: XDG_CACHE_HOME
+                  value: /var/cache/alida-vector
                 - name: ALIDA_DATABASE_URL
                   valueFrom:
                     secretKeyRef:
@@ -67,7 +91,17 @@ spec:
                 - name: config
                   mountPath: /config
                   readOnly: true
+                - name: cache
+                  mountPath: /var/cache/alida-vector
+                - name: tmp
+                  mountPath: /tmp
           volumes:
             - name: config
               configMap:
                 name: alida-vector-config
+            - name: cache
+              emptyDir:
+                sizeLimit: 512Mi
+            - name: tmp
+              emptyDir:
+                sizeLimit: 1Gi

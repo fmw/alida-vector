@@ -1,0 +1,19 @@
+misconfigurations:
+  - id: KSV-0109
+    paths:
+      - "configmap.example.yml"
+      - "deploy/kubernetes/configmap.example.yml"
+    expired_at: 2027-07-23
+    statement: >-
+      The ConfigMap contains only an ALIDA_DATABASE_PASSWORD environment
+      placeholder. Kubernetes supplies its value from secretKeyRef at runtime.
+  - id: KSV-0125
+    paths:
+      - "cronjob.yml"
+      - "migrate-job.yml"
+      - "deploy/kubernetes/cronjob.yml"
+      - "deploy/kubernetes/migrate-job.yml"
+    expired_at: 2027-07-23
+    statement: >-
+      ghcr.io/fmw/alida-vector is this project's official registry, and the
+      example requires replacing the placeholder with an immutable digest.

@@ -236,5 +236,8 @@ as a unit:
   room for Chromium and native allocations when browser-backed sources are in
   use.
 
-The generic manifest intentionally provides conservative retry behavior but
-leaves workload-specific deadlines and resources to the deployment repository.
+The generic manifest provides conservative retry and security defaults,
+including a read-only root filesystem, explicit non-root UID/GID, dropped
+capabilities, bounded writable volumes, and starter resource requests and
+limits. Tune workload-specific deadlines, resources, and volume limits in the
+deployment repository.
