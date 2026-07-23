@@ -3,6 +3,7 @@ name: Container Image
 on:
   pull_request:
     paths:
+      - "CHANGELOG.md"
       - ".dockerignore"
       - ".github/workflows/container-image.yml"
       - "Dockerfile"
@@ -17,6 +18,7 @@ on:
     tags:
       - "v*"
     paths:
+      - "CHANGELOG.md"
       - ".dockerignore"
       - ".github/workflows/container-image.yml"
       - "Dockerfile"
