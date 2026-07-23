@@ -1,7 +1,9 @@
 # Changelog
 
-## Unreleased
+## 0.1.2 - 2026-07-23
 
+- Preserve document-level added, changed, and moved metadata across batched LLM
+  verification prompts so large crawl diffs are evaluated consistently.
 - Add opt-in age-based crawl-history retention after successful crawls.
 - Allow manual pruning to be limited to one index with `--index`.
 
