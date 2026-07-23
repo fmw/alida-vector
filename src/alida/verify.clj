@@ -269,6 +269,7 @@
    "moved" :moved_urls})
 
 (defn- document-diff-entry-counts
+  "Counts distinct document classifications despite repeated chunk fragments."
   [documents]
   (->> documents
        (mapcat (fn [document]
