@@ -6,6 +6,9 @@
   verification prompts so large crawl diffs are evaluated consistently.
 - Add opt-in age-based crawl-history retention after successful crawls.
 - Allow manual pruning to be limited to one index with `--index`.
+- Harden the container identity and example Kubernetes batch workloads with
+  explicit non-root security contexts, a read-only root filesystem, dropped
+  capabilities, writable-volume bounds, and resource limits.
 
 ## 0.1.1 - 2026-07-22
 

@@ -27,8 +27,9 @@ RUN apt-get update \
       openjdk-21-jre-headless \
     && rm -rf /var/lib/apt/lists/*
 
-RUN groupadd --system alida \
-    && useradd --system --gid alida --home-dir "$ALIDA_VECTOR_HOME" --create-home alida \
+RUN groupadd --gid 10001 alida \
+    && useradd --uid 10001 --gid alida --home-dir "$ALIDA_VECTOR_HOME" \
+      --create-home --shell /usr/sbin/nologin alida \
     && mkdir -p /config /var/cache/alida-vector /tmp/alida-vector \
     && chown -R alida:alida "$ALIDA_VECTOR_HOME" /config /var/cache/alida-vector /tmp/alida-vector
 
@@ -37,6 +38,10 @@ COPY --from=builder --chown=alida:alida /workspace/target/alida-vector.jar /opt/
 
 USER alida
 WORKDIR /opt/alida-vector
+
+# This is a finite batch image, not a long-running network service. Kubernetes
+# observes Job completion instead of polling an in-container health endpoint.
+HEALTHCHECK NONE
 
 ENTRYPOINT ["dumb-init", "--", "alida-vector"]
 CMD ["crawl", "--config", "/config/alida.yml"]

@@ -7,6 +7,7 @@ scheduled Kubernetes batch job.
 
 - `configmap.example.yml`: non-secret Alida config placeholder.
 - `secret.example.yml`: required secret keys.
+- `namespace.yml`: dedicated namespace used by the example resources.
 - `migrate-job.yml`: one-shot schema migration job.
 - `cronjob.yml`: recurring crawl job.
 
@@ -19,7 +20,7 @@ configuration outside this repository.
 Use an immutable image digest instead of a mutable tag:
 
 ```text
-ghcr.io/OWNER/alida-vector@sha256:...
+ghcr.io/fmw/alida-vector@sha256:...
 ```
 
 If your cluster uses a private registry, mirror the image into that registry and
@@ -27,9 +28,10 @@ keep the digest pin in the workload manifest.
 
 ## Deployment Order
 
-1. Create or update the ConfigMap and Secret.
-2. Run `migrate-job.yml` once for the image/config version.
-3. Apply `cronjob.yml`.
+1. Create `namespace.yml`.
+2. Create or update the ConfigMap and Secret.
+3. Run `migrate-job.yml` once for the image/config version.
+4. Apply `cronjob.yml`.
 
 The CronJob uses `concurrencyPolicy: Forbid`. Alida also uses per-index
 PostgreSQL advisory locks, which protects against accidental overlapping crawls
@@ -57,7 +59,9 @@ Pod attempts and their backoff. Consider setting `timeZone`,
 `startingDeadlineSeconds`, and `ttlSecondsAfterFinished` explicitly in the
 deployment repository as described in the main deployment guide.
 
-The manifests rely on the container's writable filesystem for temporary and
-cache files. If your deployment sets `readOnlyRootFilesystem: true`, add
-writable volumes for the required paths and set an appropriate pod security
-context, such as `fsGroup`, so the non-root container user can write to them.
+The example workloads run as UID/GID `10001`, drop Linux capabilities, disable
+privilege escalation and service-account token mounting, use the runtime-default
+seccomp profile, and make the root filesystem read-only. Bounded `emptyDir`
+volumes keep `/tmp` and `/var/cache/alida-vector` writable. Tune the example
+resource requests, limits, and volume size limits for the configured crawl and
+its browser concurrency before deployment.
