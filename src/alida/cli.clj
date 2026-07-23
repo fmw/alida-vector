@@ -211,8 +211,22 @@
            (map format-pruned-run pruned)))
     "Pruned 0 runs."))
 
+(defn- format-automatic-pruning
+  [{:keys [failed message pruned_count skipped max_age_days]}]
+  (cond
+    failed
+    (format "History pruning failed after successful crawls: %s" message)
+
+    skipped
+    "History pruning skipped because one or more indexes failed."
+
+    :else
+    (format "History pruning removed %s runs older than %s days."
+            pruned_count
+            max_age_days)))
+
 (defn- format-crawl-result
-  [{:keys [succeeded failed]}]
+  [{:keys [succeeded failed pruning]}]
   (str/join
    \newline
    (concat
@@ -220,11 +234,13 @@
              (count succeeded)
              (count failed))]
     (map format-crawled-run succeeded)
-    (map format-failed-index failed))))
+    (map format-failed-index failed)
+    (when pruning [(format-automatic-pruning pruning)]))))
 
 (defn- crawl-exit-code
-  [{:keys [failed]}]
+  [{:keys [failed pruning]}]
   (cond
+    (and (empty? failed) (:failed pruning)) 1
     (empty? failed) 0
     (every? #(true? (get-in % [:data :retryable])) failed) temporary-failure-exit-code
     :else 1))
@@ -299,7 +315,8 @@
                  #(db/prune-runs! %
                                   {:keep-last (:keep-last options)
                                    :older-than (older-than-cutoff (:older-than options))
-                                   :disabled-embeddings (:disabled-embeddings options)}))]
+                                   :disabled-embeddings (:disabled-embeddings options)
+                                   :index-names (some-> (:index options) vector)}))]
     {:exit-code 0
      :message (format-prune-result result)}))
 

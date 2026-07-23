@@ -208,6 +208,10 @@
    [:slack_webhook_url {:optional true} :string]
    [:label {:optional true} :string]])
 
+(def Retention
+  [:map {:closed true}
+   [:max_age_days :int]])
+
 (def Database
   [:map
    [:jdbc_url :string]
@@ -249,4 +253,5 @@
    [:storage {:optional true} Storage]
    [:verification Verification]
    [:notifications {:optional true} Notifications]
+   [:retention {:optional true} Retention]
    [:indexes [:sequential Index]]])

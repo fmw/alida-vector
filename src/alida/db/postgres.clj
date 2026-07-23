@@ -637,18 +637,28 @@
    ["SELECT * FROM alida_reports WHERE run_id = ?" (run-id value)]
    jdbc-opts))
 
+(defn- restrict-prune-candidates
+  [candidates index-names]
+  (let [selected (set index-names)]
+    (if (nil? index-names)
+      candidates
+      (filterv #(contains? selected (:index_name %)) candidates))))
+
 (defn prune-candidate-runs
-  [connectable {:keys [keep-last older-than disabled-embeddings]}]
+  [connectable {:keys [keep-last older-than disabled-embeddings index-names]}]
   (require-prune-criteria! {:keep-last keep-last
                             :older-than older-than
                             :disabled-embeddings disabled-embeddings})
   (let [older-than (timestamp older-than)]
-    (with-connection
-      connectable
-      (fn [conn]
-        (jdbc/execute!
-         conn
-         ["WITH ranked AS (
+    (restrict-prune-candidates
+     (with-connection
+       connectable
+       (fn [conn]
+         (let [index-names-array (when (some? index-names)
+                                   (text-array conn index-names))]
+           (jdbc/execute!
+            conn
+            ["WITH ranked AS (
         SELECT r.*,
                row_number() OVER (
                  PARTITION BY r.index_name
@@ -661,7 +671,8 @@
       )
       SELECT id, index_name, lifecycle_status, embedding_dimensions, started_at, finished_at
       FROM ranked
-      WHERE id IS DISTINCT FROM live_run_id
+      WHERE (?::text[] IS NULL OR index_name = ANY(?::text[]))
+        AND id IS DISTINCT FROM live_run_id
         AND id IS DISTINCT FROM previous_live_run_id
         AND lifecycle_status = ANY(?)
         AND (?::integer IS NULL OR index_rank > ?)
@@ -670,13 +681,16 @@
              OR COALESCE((metadata->>'embedding_disabled')::boolean, false) = true
              OR metadata->>'embedding_provider' = 'noop')
       ORDER BY index_name, started_at"
-          (text-array conn pruneable-lifecycle-statuses)
-          keep-last
-          keep-last
-          older-than
-          older-than
-          (boolean disabled-embeddings)]
-         jdbc-opts)))))
+             index-names-array
+             index-names-array
+             (text-array conn pruneable-lifecycle-statuses)
+             keep-last
+             keep-last
+             older-than
+             older-than
+             (boolean disabled-embeddings)]
+            jdbc-opts))))
+     index-names)))
 
 (defn- prune-run!
   [tx opts run]
@@ -693,7 +707,11 @@
                                  :lifecycle_status (:lifecycle_status run)
                                  :embedding_dimensions (:embedding_dimensions run)
                                  :partition partition-name
-                                 :criteria (select-keys opts [:keep-last :older-than :disabled-embeddings])}})
+                                 :criteria (select-keys opts
+                                                        [:keep-last
+                                                         :older-than
+                                                         :disabled-embeddings
+                                                         :index-names])}})
     (assoc run :partition partition-name)))
 
 (defn prune-runs!

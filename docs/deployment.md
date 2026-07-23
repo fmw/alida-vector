@@ -70,6 +70,66 @@ Container-specific environment variables:
 - `CHROME_BIN`: Chromium binary path.
 - `CHROMEDRIVER_BIN`: Chromedriver binary path.
 
+## Crawl History Retention
+
+Run history is retained indefinitely by default. Opt in to automatic
+age-based pruning with:
+
+```yaml
+retention:
+  max_age_days: 30
+```
+
+After all selected indexes finish successfully, Alida removes eligible runs
+whose `started_at` is older than the configured number of days. Automatic
+pruning is limited to the indexes selected by that crawl, including when
+`crawl --index NAME` is used. Omit `retention` entirely to keep automatic
+pruning disabled.
+
+The same protections as the manual `prune` command apply. Alida never removes:
+
+- the current live run
+- the previous live run retained for rollback
+- a run that is still being crawled, embedded, or verified
+
+Other terminal runs can become eligible, including completed candidates still
+awaiting review, rejected runs, superseded runs, and failed runs. Choose
+`max_age_days` long enough for the required review and incident-investigation
+window. The per-run vector partition and the run's documents, diffs,
+verifications, and reports are removed together. Audit events remain, with
+their run reference cleared by the database foreign key.
+
+Automatic pruning is skipped when any selected index fails, so it cannot
+interfere with status `75` retry handling. If pruning itself fails after a
+successful crawl, `crawl` returns status `1`; completed or activated runs are
+not rolled back, and their successful summaries remain in the command output.
+The example Kubernetes `podFailurePolicy` treats status `1` as permanent, so
+the next scheduled crawl can attempt pruning again. A scheduler that retries
+every non-zero status can instead repeat the completed crawl; use a
+status-aware retry policy or disable whole-Job retries when that is undesirable.
+
+Manual pruning remains available for one-off cleanup and supports additional
+criteria:
+
+```bash
+alida-vector prune --config /config/alida.yml --older-than 30d
+alida-vector prune --config /config/alida.yml --index docs --keep-last 10
+```
+
+Alida deliberately does not run `VACUUM` after pruning. The largest data is in
+per-run partitions, and dropping an old partition releases that relation
+directly while avoiding the vacuum overhead of a bulk delete. PostgreSQL
+autovacuum should handle the smaller cascaded deletes in the metadata tables.
+See PostgreSQL's guidance on
+[partition maintenance](https://www.postgresql.org/docs/current/ddl-partitioning.html)
+and [routine vacuuming](https://www.postgresql.org/docs/current/routine-vacuuming.html).
+
+Do not use `VACUUM FULL` as routine post-crawl maintenance: it rewrites and
+exclusively locks each target table. PostgreSQL also does not auto-analyze
+partitioned parent tables, so deployments with changing data distributions
+may separately schedule targeted `ANALYZE` based on observed query plans. That
+planner maintenance is independent of crawl-history pruning.
+
 ## Kubernetes CronJob
 
 Run `migrate` during deployment before scheduling recurring crawls, or use an

@@ -62,6 +62,20 @@ The `noop` embedding provider and disabled LLM verification make this suitable f
 
 Source maps are strict: an unknown, misspelled, or source-inappropriate key causes configuration loading to fail instead of being silently ignored. Keep source IDs stable and unique within an index. The source ID forms part of a document's identity, so changing it makes existing documents appear removed and new documents appear added in the next diff.
 
+## Run History Retention
+
+Automatic pruning is opt-in. Add a top-level retention policy to remove
+eligible non-live history after fully successful crawls:
+
+```yaml
+retention:
+  max_age_days: 30
+```
+
+Omit `retention` to keep history until it is pruned manually. See
+[Crawl History Retention](deployment.md#crawl-history-retention) for lifecycle
+protections, failure behavior, and PostgreSQL maintenance guidance.
+
 ## Choose a Source Type
 
 | Source type | Use it for | Required discovery setting |

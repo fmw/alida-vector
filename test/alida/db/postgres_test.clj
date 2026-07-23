@@ -8,6 +8,18 @@
   (is (= 1849900176771858938
          (db/advisory-lock-key "support-knowledge-base"))))
 
+(deftest prune-candidates-can-be-scoped-to-selected-indexes
+  (let [candidates [{:id 1 :index_name "docs"}
+                    {:id 2 :index_name "blog"}
+                    {:id 3 :index_name "docs"}]]
+    (is (= candidates
+           (#'db/restrict-prune-candidates candidates nil)))
+    (is (= []
+           (#'db/restrict-prune-candidates candidates [])))
+    (is (= [{:id 1 :index_name "docs"}
+            {:id 3 :index_name "docs"}]
+           (#'db/restrict-prune-candidates candidates ["docs"])))))
+
 (deftest insert-chunks-uses-one-batch-statement
   (let [calls (atom [])
         run-id (java.util.UUID/randomUUID)

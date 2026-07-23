@@ -5,7 +5,8 @@
             [alida.source.local]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]])
-  (:import [java.util.concurrent TimeUnit]))
+  (:import [java.time Duration Instant]
+           [java.util.concurrent TimeUnit]))
 
 (defn- temp-file
   [suffix body]
@@ -376,9 +377,12 @@
       (is (str/includes? output "done") output))))
 
 (deftest crawl-continues-with-other-indexes-after-one-index-fails
-  (let [sys {:alida/config {:indexes [{:name "broken"} {:name "ok"}]}}
-        reconciled? (atom false)]
+  (let [sys {:alida/config {:retention {:max_age_days 30}
+                            :indexes [{:name "broken"} {:name "ok"}]}}
+        reconciled? (atom false)
+        pruned? (atom false)]
     (with-redefs [db/reconcile-orphaned-runs! (fn [_] (reset! reconciled? true))
+                  db/prune-runs! (fn [_ _] (reset! pruned? true))
                   crawl/crawl-index! (fn [_ _ index-cfg]
                                        (if (= "broken" (:name index-cfg))
                                          (throw (ex-info "boom" {:reason :test}))
@@ -386,9 +390,67 @@
                                           :index_name (:name index-cfg)}))]
       (let [result (crawl/crawl! sys :ignored {})]
         (is @reconciled?)
+        (is (false? @pruned?))
         (is (= ["ok"] (mapv :index_name (:succeeded result))))
         (is (= ["broken"] (mapv :index_name (:failed result))))
-        (is (= "boom" (-> result :failed first :message)))))))
+        (is (= "boom" (-> result :failed first :message)))
+        (is (= {:skipped true
+                :reason :crawl-failed
+                :max_age_days 30}
+               (:pruning result)))))))
+
+(deftest crawl-prunes-selected-index-history-after-success
+  (let [sys {:alida/config {:retention {:max_age_days 30}
+                            :indexes [{:name "docs"} {:name "blog"}]}}
+        prune-opts (atom nil)
+        before (.minus (Instant/now) (Duration/ofDays 30))]
+    (with-redefs [db/reconcile-orphaned-runs! (constantly nil)
+                  db/prune-runs! (fn [_ opts]
+                                   (reset! prune-opts opts)
+                                   {:pruned []
+                                    :pruned_count 0})
+                  crawl/crawl-index! (fn [_ _ index-cfg]
+                                       {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                                        :index_name (:name index-cfg)})]
+      (let [result (crawl/crawl! sys :ignored {:index-name "docs"})
+            after (.minus (Instant/now) (Duration/ofDays 30))
+            cutoff (:older-than @prune-opts)]
+        (is (= ["docs"] (:index-names @prune-opts)))
+        (is (instance? Instant cutoff))
+        (is (not (.isBefore cutoff before)))
+        (is (not (.isAfter cutoff after)))
+        (is (= {:pruned []
+                :pruned_count 0
+                :max_age_days 30}
+               (:pruning result)))))))
+
+(deftest crawl-does-not-prune-when-retention-is-omitted
+  (let [sys {:alida/config {:indexes [{:name "docs"}]}}]
+    (with-redefs [db/reconcile-orphaned-runs! (constantly nil)
+                  db/prune-runs! (fn [& _]
+                                   (throw (ex-info "unexpected pruning" {})))
+                  crawl/crawl-index! (fn [_ _ index-cfg]
+                                       {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                                        :index_name (:name index-cfg)})]
+      (is (nil? (:pruning (crawl/crawl! sys :ignored {})))))))
+
+(deftest crawl-reports-automatic-pruning-failures-after-success
+  (let [sys {:alida/config {:retention {:max_age_days 30}
+                            :indexes [{:name "docs"}]}}]
+    (with-redefs [db/reconcile-orphaned-runs! (constantly nil)
+                  db/prune-runs! (fn [_ _]
+                                   (throw (ex-info "database unavailable" {})))
+                  crawl/crawl-index! (fn [_ _ index-cfg]
+                                       {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                                        :index_name (:name index-cfg)})]
+      (let [result (crawl/crawl! sys :ignored {})]
+        (is (= ["docs"] (mapv :index_name (:succeeded result))))
+        (is (= []
+               (:failed result)))
+        (is (= {:failed true
+                :message "database unavailable"
+                :max_age_days 30}
+               (:pruning result)))))))
 
 (deftest verification-documents-forwards-changed-and-added-page-content
   ;; Regression: the in-memory document map has no :source_id (only attached at

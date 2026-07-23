@@ -189,11 +189,16 @@
                                      (is (= 2 (:keep-last opts)))
                                      (is (instance? Instant (:older-than opts)))
                                      (is (nil? (:disabled-embeddings opts)))
+                                     (is (= ["docs"] (:index-names opts)))
                                      {:pruned [{:id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
                                                 :index_name "docs"
                                                 :lifecycle_status "error"
                                                 :partition "alida_chunks_1536_run_018c9099041d7f5b9b655b8f08f8e61d"}]})]
-        (let [result (cli/run ["prune" "--config" "ignored.yml" "--keep-last" "2" "--older-than" "30d"])]
+        (let [result (cli/run ["prune"
+                               "--config" "ignored.yml"
+                               "--index" "docs"
+                               "--keep-last" "2"
+                               "--older-than" "30d"])]
           (is (= 0 (:exit-code result)))
           (is (str/includes? (:message result) "Pruned 1 runs."))
           (is (str/includes? (:message result) "018c9099-041d-7f5b-9b65-5b8f08f8e61d")))))))
@@ -239,14 +244,18 @@
                                                  :skipped_count 1
                                                  :verification_verdict nil
                                                  :notification {:sent true}}]
-                                    :failed []})]
+                                    :failed []
+                                    :pruning {:pruned_count 2
+                                              :max_age_days 30}})]
         (let [result (cli/run ["crawl" "--config" "ignored.yml" "--index" "docs"])]
           (is (= 0 (:exit-code result)))
           (is (str/includes? (:message result) "1 succeeded, 0 failed"))
           (is (str/includes? (:message result) "docs"))
           (is (str/includes? (:message result) "skipped=1"))
           (is (str/includes? (:message result) "verdict=-"))
-          (is (str/includes? (:message result) "notification=sent")))))))
+          (is (str/includes? (:message result) "notification=sent"))
+          (is (str/includes? (:message result)
+                             "History pruning removed 2 runs older than 30 days.")))))))
 
 (deftest crawl-command-exits-nonzero-when-any-index-fails
   (with-system-stub
@@ -264,6 +273,30 @@
           (is (str/includes? (:message result) "0 succeeded, 1 failed"))
           (is (str/includes? (:message result) "docs  failed: boom"))
           (is (str/includes? (:message result) "notification=failed(status=500)")))))))
+
+(deftest crawl-command-preserves-summary-when-automatic-pruning-fails
+  (with-system-stub
+    (fn []
+      (with-redefs [db/datasource (fn [_]
+                                    (reify java.io.Closeable
+                                      (close [_] nil)))
+                    crawl/crawl! (fn [_ _ _]
+                                   {:succeeded [{:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                                                 :index_name "docs"
+                                                 :document_count 2
+                                                 :chunk_count 3
+                                                 :error_count 0
+                                                 :notification {:sent true}}]
+                                    :failed []
+                                    :pruning {:failed true
+                                              :message "database unavailable"
+                                              :max_age_days 30}})]
+        (let [result (cli/run ["crawl" "--config" "ignored.yml"])]
+          (is (= 1 (:exit-code result)))
+          (is (str/includes? (:message result) "1 succeeded, 0 failed"))
+          (is (str/includes? (:message result) "018c9099-041d-7f5b-9b65-5b8f08f8e61d"))
+          (is (str/includes? (:message result)
+                             "History pruning failed after successful crawls: database unavailable")))))))
 
 (deftest crawl-command-distinguishes-retryable-failures
   (testing "all failures are retryable"
