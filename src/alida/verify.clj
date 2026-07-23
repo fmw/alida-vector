@@ -263,14 +263,41 @@
   [diff-batch]
   (every? empty? (vals diff-batch)))
 
+(def document-diff-count-keys
+  {"added" :added_urls
+   "changed" :changed_urls
+   "moved" :moved_urls})
+
+(defn- document-diff-entry-counts
+  "Counts distinct document classifications despite repeated chunk fragments."
+  [documents]
+  (->> documents
+       (mapcat (fn [document]
+                 (map (fn [entry]
+                        [(:source_id document)
+                         (:canonical_url document)
+                         (:classification entry)])
+                      (:diff_entries document))))
+       distinct
+       (keep (fn [[_source-id _canonical-url classification]]
+               (get document-diff-count-keys classification)))
+       frequencies))
+
+(def diff-batch-contract
+  (str "Diff batch contract: summary and total_counts cover the whole run. "
+       "Current documents carry matching diff_entries, which are omitted from batch_entries. "
+       "Empty batch_entries is valid when documents are present; other batches contain uncovered "
+       "entries such as removals."))
+
 (defn- prompt-diff
-  [diff diff-batch]
+  [diff diff-batch documents]
   (when diff
     {:previous_run_id (:previous_run_id diff)
      :summary (:summary diff)
      :total_counts (into {} (map (fn [{:keys [key]}]
                                    [key (count (get diff key))])
                                  diff-entry-groups))
+     :document_diff_entry_counts (document-diff-entry-counts documents)
      :batch_entries (or diff-batch (empty-diff-batch))}))
 
 (defn build-prompt
@@ -287,8 +314,9 @@
                    (when (:kind batch)
                      (str " (" (:kind batch) ")"))))
             (str "Deterministic gate: " (json-block deterministic_verification))
+            (when diff diff-batch-contract)
             (str "Diff summary and this batch of URL-level diff entries: "
-                 (json-block (prompt-diff diff diff_batch)))
+                 (json-block (prompt-diff diff diff_batch documents)))
             (str "Documents for full diff validation: " (json-block documents))])))
 
 (def conservative-batch-marker
@@ -441,6 +469,47 @@
     :moved_urls [(:source_id entry) (:current_canonical_url entry)]
     nil))
 
+(defn- document-diff-entry
+  [group entry]
+  (case group
+    :added_urls
+    {:classification "added"}
+
+    :changed_urls
+    (assoc (select-keys entry [:previous_normalized_content_hash
+                               :current_normalized_content_hash])
+           :classification "changed")
+
+    :moved_urls
+    (assoc (select-keys entry [:previous_canonical_url
+                               :current_canonical_url])
+           :classification "moved")
+
+    nil))
+
+(defn- document-diff-entries
+  [diff]
+  (reduce (fn [entries-by-document {:keys [group entry]}]
+            (if-let [document-key (diff-entry-current-key group entry)]
+              (update entries-by-document
+                      document-key
+                      (fnil conj [])
+                      (document-diff-entry group entry))
+              entries-by-document))
+          {}
+          (diff-items diff)))
+
+(defn- annotate-document-diffs
+  [diff documents]
+  (let [entries-by-document (document-diff-entries diff)]
+    (mapv (fn [document]
+            (if-let [entries (not-empty
+                              (get entries-by-document
+                                   (document-entry-key document)))]
+              (assoc document :diff_entries entries)
+              document))
+          documents)))
+
 (defn- covered-by-documents?
   [document-keys group entry]
   (when-let [entry-key (diff-entry-current-key group entry)]
@@ -530,8 +599,10 @@
 
 (defn build-prompts
   [{:keys [documents max_prompt_tokens] :as input}]
-  (let [max-tokens (or max_prompt_tokens default-max-prompt-tokens)
-        _ (require-prompt-fits! input
+  (let [documents (annotate-document-diffs (:diff input) documents)
+        prepared-input (assoc input :documents documents)
+        max-tokens (or max_prompt_tokens default-max-prompt-tokens)
+        _ (require-prompt-fits! prepared-input
                                 []
                                 (empty-diff-batch)
                                 max-tokens
@@ -542,13 +613,13 @@
                          {:kind "documents"
                           :documents documents
                           :diff_batch (empty-diff-batch)})
-                       (document-batches input documents max-tokens))
+                       (document-batches prepared-input documents max-tokens))
                  (mapv (fn [diff-batch]
                          {:kind "diff"
                           :documents []
                           :diff_batch diff-batch})
-                       (diff-batches input
-                                     (uncovered-diff (:diff input) documents)
+                       (diff-batches prepared-input
+                                     (uncovered-diff (:diff prepared-input) documents)
                                      max-tokens)))
         batches (or (seq batches)
                     [{:kind "empty"
@@ -557,7 +628,7 @@
         batch-count (count batches)]
     (mapv (fn [index {:keys [kind documents diff_batch]}]
             (require-final-prompt-fits!
-             (build-prompt (assoc input
+             (build-prompt (assoc prepared-input
                                   :documents documents
                                   :diff_batch diff_batch
                                   :batch {:number (inc index)
