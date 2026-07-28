@@ -13,10 +13,6 @@
 (def default-webdriver-max-concurrency 5)
 (def default-category-page-limit 100)
 
-;; The article view endpoint negotiates representation on Accept: without it the
-;; gateway returns text/plain (rejected by extraction). Request HTML explicitly.
-(def article-accept-header "text/html")
-
 (defn- source-urls
   [source-cfg]
   (or (seq (:start_urls source-cfg))
@@ -118,7 +114,7 @@
 
 (defn- article-api-url
   [{:keys [origin]} article-id]
-  (str origin "/rest/servicedesk/knowledgebase/latest/articles/view/" article-id))
+  (str origin "/wiki/api/v2/pages/" article-id "?body-format=view"))
 
 (defn- category-page-limit
   [source-cfg]
@@ -224,11 +220,26 @@
     (catch Exception _
       nil)))
 
+(defn- confluence-short-link-shim
+  [source-cfg href]
+  (let [origin (url/origin href)
+        source-origins (set (keep url/origin (source-urls source-cfg)))]
+    (when-let [[_ code] (and (contains? source-origins origin)
+                             (re-find #"/wiki/x/([^/?#]+)" (or href "")))]
+      (str origin
+           "/plugins/servlet/servicedesk/customer/confluence/shim/x/"
+           code))))
+
 (defn- href-article-id
   [sys source-cfg href]
   (or (url/article-id href)
-      (when (str/includes? href "/plugins/servlet/servicedesk/customer/confluence/shim/x/")
-        (resolve-shim-link sys source-cfg href))))
+      (when-let [shim-url
+                 (if (str/includes?
+                      href
+                      "/plugins/servlet/servicedesk/customer/confluence/shim/x/")
+                   href
+                   (confluence-short-link-shim source-cfg href))]
+        (resolve-shim-link sys source-cfg shim-url))))
 
 (defn- article-links
   [sys source-cfg base-url body]
@@ -239,38 +250,53 @@
          distinct
          vec)))
 
-(defn- article-title
-  [fallback-title body]
-  (or fallback-title
-      (let [document (Jsoup/parse (or body "") "")
-            heading (.selectFirst document "h1")]
-        (some-> heading .text str/trim not-empty))))
+(defn- article-payload
+  [response]
+  (try
+    (read-json (:body response))
+    (catch Exception _
+      nil)))
 
-(defn- article-response
-  [sys url]
-  (let [response (source/request! sys {:method :get :url url
-                                       :headers {"Accept" article-accept-header}})]
-    (if (= 406 (:status response))
-      (source/request! sys {:method :get :url url
-                            :headers {"Accept" "application/json"}})
-      response)))
+(defn- article-body
+  [payload]
+  (get-in payload [:body :view :value]))
 
 (defn- fetch-article
   [sys source-cfg ctx ref]
   (let [id (:article_id ref)
         url (article-api-url ctx id)
         canonical-url (or (:canonical_url ref) (article-url ctx id))
-        response (article-response sys url)]
+        response (source/request! sys {:method :get
+                                       :url url
+                                       :headers {"Accept" "application/json"}})]
     (if (source/successful-status? (:status response))
-      {:source_id (:id source-cfg)
-       :source_type (:type source-cfg)
-       :external_id id
-       :canonical_url canonical-url
-       :content_type (or (source/header response "Content-Type") "text/html")
-       :title (article-title (:title ref) (:body response))
-       :body (:body response)
-       :hrefs (mapv #(article-url ctx %)
-                    (article-links sys source-cfg canonical-url (:body response)))}
+      (if-let [payload (article-payload response)]
+        (let [raw-body (article-body payload)]
+          (if (string? raw-body)
+            {:source_id (:id source-cfg)
+             :source_type (:type source-cfg)
+             :external_id id
+             :canonical_url canonical-url
+             :content_type "text/html"
+             :title (or (some-> (:title payload) str/trim not-empty)
+                        (:title ref))
+             :body raw-body
+             :hrefs (mapv #(article-url ctx %)
+                          (article-links sys source-cfg canonical-url raw-body))}
+            (source/anomaly
+             :cognitect.anomalies/fault
+             {:type :alida.source.jira-service-management/article-content-missing
+              :source-id (:id source-cfg)
+              :canonical-url canonical-url
+              :article-id id
+              :status (:status response)})))
+        (source/anomaly
+         :cognitect.anomalies/fault
+         {:type :alida.source.jira-service-management/article-response-invalid
+          :source-id (:id source-cfg)
+          :canonical-url canonical-url
+          :article-id id
+          :status (:status response)}))
       (if (= 404 (:status response))
         (source/skipped {:type :alida.source.jira-service-management/article-not-found
                          :source-id (:id source-cfg)

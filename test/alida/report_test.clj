@@ -144,9 +144,22 @@
 (deftest slack-blocks-omit-verification-detail-field
   (let [blocks (:slack_blocks (report/build (assoc summary
                                                    :verification_verdict "pass"
-                                                   :verification {:llm_verdict "pass"})))
-        field-texts (mapcat (fn [block] (map :text (:fields block))) blocks)]
-    (is (not-any? #(str/includes? % "Verification") field-texts))))
+                                                   :verification {:llm_verdict "pass"
+                                                                  :reasoning "No review needed."})))
+        block-texts (keep #(get-in % [:text :text]) blocks)]
+    (is (not-any? #(str/includes? % "LLM validation") block-texts))))
+
+(deftest slack-blocks-explain-non-pass-llm-verdicts
+  (doseq [llm-verdict ["caution" "fail"]]
+    (let [blocks (:slack_blocks (report/build (assoc summary
+                                                     :verification_verdict llm-verdict
+                                                     :verification {:llm_verdict llm-verdict
+                                                                    :reasoning "Review <unsafe> & stale guidance."})))
+          block-texts (keep #(get-in % [:text :text]) blocks)]
+      (is (some #(str/includes? % (str "*LLM validation (" llm-verdict ")*"))
+                block-texts))
+      (is (some #(str/includes? % "Review &lt;unsafe&gt; &amp; stale guidance.")
+                block-texts)))))
 
 (deftest builds-full-report
   (let [full-report (:full_report (report/build summary))]

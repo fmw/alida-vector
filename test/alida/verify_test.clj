@@ -110,6 +110,16 @@
         "an empty run must not earn a default pass")
     (is (some #(= :zero_documents (:check %)) (:deterministic_findings result)))))
 
+(deftest system-prompt-limits-verification-to-crawl-integrity-and-threats
+  (is (str/includes? verify/system-prompt "Check crawl correctness and safety."))
+  (is (str/includes? verify/system-prompt "This is not an editorial check"))
+  (is (str/includes? verify/system-prompt
+                     "Caution creates review friction, so it should not be used lightly"))
+  (is (str/includes? verify/system-prompt
+                     (str "Pass when there are no concerning signals, caution when a plausible "
+                          "issue warrants human review, and fail only for a clear serious issue")))
+  (is (not (str/includes? verify/system-prompt "concrete evidence"))))
+
 (deftest build-prompt-spotlights-untrusted-diff-content
   (let [prompt (verify/build-prompt
                 {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
