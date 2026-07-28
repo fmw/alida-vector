@@ -1,5 +1,6 @@
 (ns alida.source.jira-service-management-test
-  (:require [alida.source :as source]
+  (:require [alida.extract.html :as html]
+            [alida.source :as source]
             [alida.source.jira-service-management :as jsm]
             [alida.source.webdriver :as webdriver]
             [alida.test-helpers :refer [fake-http]]
@@ -148,7 +149,7 @@
            (mapv :canonical_url items))
         "a /rest/ viewUrl must not leak into the canonical URL")))
 
-(deftest api-skips-articles-that-are-not-found
+(deftest api-skips-isolated-articles-that-are-not-found
   (let [requests (atom [])
         article-url (page-api-url "1001")
         sys {:alida/http-request
@@ -159,7 +160,7 @@
                  {:status 200 :body (portal-page)}
 
                  (= url (category-url))
-                 {:status 200 :body (rest-view-category-response)}
+                 {:status 200 :body (category-response)}
 
                  (and (= url article-url)
                       (= "application/json" (get headers "Accept")))
@@ -168,52 +169,81 @@
                   :body (json/write-str {:httpStatusCode 404
                                          :message "The knowledge base article could not be found."})}
 
+                 (= url (page-api-url "1002"))
+                 {:status 200
+                  :headers {"Content-Type" "application/json"}
+                  :body (page-response "1002"
+                                       "Article Two"
+                                       "<article><p>Body.</p></article>")}
+
                  :else
                  {:status 500 :body "unexpected request"}))}
         items (source/discover sys source-cfg)]
-    (is (= 1 (count items)))
-    (is (source/skipped? (first items)))
+    (is (= 2 (count items)))
+    (is (= 1 (count (filter source/skipped? items))))
     (is (= :alida.source.jira-service-management/article-not-found
-           (get-in (first items) [:alida/skipped :type])))
+           (get-in (first (filter source/skipped? items)) [:alida/skipped :type])))
     (is (= ["application/json"]
            (->> @requests
                 (filter #(= article-url (:url %)))
                 (mapv #(get-in % [:headers "Accept"])))))))
 
-(deftest api-resolves-confluence-short-links-through-the-portal-shim
-  (let [requests (atom [])
-        shim-url (str "https://example.atlassian.net"
-                      "/plugins/servlet/servicedesk/customer/confluence/shim/x/abc")
-        sys (fake-http {"https://example.atlassian.net/servicedesk/customer/portal/1"
+(deftest api-reports-when-the-page-api-is-unavailable
+  (let [sys (fake-http {"https://example.atlassian.net/servicedesk/customer/portal/1"
                         {:status 200 :body (portal-page)}
                         (category-url)
-                        {:status 200 :body (rest-view-category-response)}
+                        {:status 200 :body (category-response)}
                         (page-api-url "1001")
-                        {:status 200
-                         :headers {"Content-Type" "application/json"}
-                         :body (page-response
-                                "1001"
-                                "Article One"
-                                (str "<article><p>Body.</p>"
-                                     "<a href=\"https://example.atlassian.net/wiki/x/abc\">"
-                                     "Related</a></article>"))}
-                        shim-url
-                        {:status 302
-                         :headers {"Location" "/servicedesk/customer/kb/view/1003"}}
-                        (page-api-url "1003")
-                        {:status 200
-                         :headers {"Content-Type" "application/json"}
-                         :body (page-response
-                                "1003"
-                                "Related article"
-                                "<article><p>Related body.</p></article>")}}
-                       requests)
+                        {:status 404 :body "not found"}
+                        (page-api-url "1002")
+                        {:status 404 :body "not found"}}
+                       (atom []))
         items (source/discover sys source-cfg)]
-    (is (= #{"1001" "1003"} (set (mapv :external_id items))))
-    (is (= :never
-           (:redirect-policy (first (filter #(= shim-url (:url %)) @requests)))))))
+    (is (= 1 (count items)))
+    (is (source/anomaly? (first items)))
+    (is (= :alida.source.jira-service-management/article-api-unavailable
+           (get-in (first items) [:alida/error :type])))
+    (is (= 2 (get-in (first items) [:alida/error :article-count])))))
 
-(deftest api-keeps-embed-card-text-and-discovers-its-link
+(deftest api-resolves-same-origin-short-links-through-the-portal-shim
+  (doseq [[short-path code]
+          [["/wiki/x/abc" "abc"]
+           ["/plugins/servlet/servicedesk/customer/confluence/shim/x/def" "def"]]]
+    (let [requests (atom [])
+          shim-url (str "https://example.atlassian.net"
+                        "/plugins/servlet/servicedesk/customer/confluence/shim/x/"
+                        code)
+          sys (fake-http {"https://example.atlassian.net/servicedesk/customer/portal/1"
+                          {:status 200 :body (portal-page)}
+                          (category-url)
+                          {:status 200 :body (rest-view-category-response)}
+                          (page-api-url "1001")
+                          {:status 200
+                           :headers {"Content-Type" "application/json"}
+                           :body (page-response
+                                  "1001"
+                                  "Article One"
+                                  (str "<article><p>Body.</p>"
+                                       "<a href=\"https://example.atlassian.net"
+                                       short-path
+                                       "\">Related</a></article>"))}
+                          shim-url
+                          {:status 302
+                           :headers {"Location" "/servicedesk/customer/kb/view/1003"}}
+                          (page-api-url "1003")
+                          {:status 200
+                           :headers {"Content-Type" "application/json"}
+                           :body (page-response
+                                  "1003"
+                                  "Related article"
+                                  "<article><p>Related body.</p></article>")}}
+                         requests)
+          items (source/discover sys source-cfg)]
+      (is (= #{"1001" "1003"} (set (mapv :external_id items))))
+      (is (= :never
+             (:redirect-policy (first (filter #(= shim-url (:url %)) @requests))))))))
+
+(deftest api-keeps-link-text-in-extracted-content-and-discovers-its-article
   (let [sys (fake-http {"https://example.atlassian.net/servicedesk/customer/portal/1"
                         {:status 200 :body (portal-page)}
                         (category-url)
@@ -224,10 +254,10 @@
                          :body (page-response
                                 "1001"
                                 "Article One"
-                                (str "<article><p>Body.</p>"
-                                     "<a data-card-appearance=\"embed\" "
+                                (str "<article><p>Body. "
+                                     "<a "
                                      "href=\"/servicedesk/customer/portal/1/article/1003\">"
-                                     "https://player.example/video/1003</a></article>"))}
+                                     "https://player.example/video/1003</a></p></article>"))}
                         (page-api-url "1003")
                         {:status 200
                          :headers {"Content-Type" "application/json"}
@@ -237,13 +267,14 @@
                                 "<article><p>Embedded body.</p></article>")}}
                        (atom []))
         items (source/discover sys source-cfg)
-        first-article (first (filter #(= "1001" (:external_id %)) items))]
+        first-article (first (filter #(= "1001" (:external_id %)) items))
+        extracted (html/extract source-cfg first-article)]
     (is (= #{"1001" "1003"} (set (mapv :external_id items))))
-    (is (str/includes? (:body first-article) "player.example"))))
+    (is (str/includes? (:normalized_content extracted)
+                       "https://player.example/video/1003"))))
 
-(deftest api-does-not-resolve-short-links-on-other-origins
+(deftest api-resolves-only-exact-short-link-paths-on-configured-origins
   (let [requests (atom [])
-        external-url "https://other.example/wiki/x/abc"
         sys (fake-http {"https://example.atlassian.net/servicedesk/customer/portal/1"
                         {:status 200 :body (portal-page)}
                         (category-url)
@@ -254,12 +285,19 @@
                          :body (page-response
                                 "1001"
                                 "Article One"
-                                (str "<article><p>Body.</p><a href=\""
-                                     external-url
-                                     "\">External</a></article>"))}}
+                                (str "<article><p>Body.</p>"
+                                     "<a href=\"https://other.example/wiki/x/abc\">External wiki</a>"
+                                     "<a href=\"https://other.example/plugins/servlet/servicedesk/customer/confluence/shim/x/abc\">External shim</a>"
+                                     "<a href=\"http://169.254.169.254/plugins/servlet/servicedesk/customer/confluence/shim/x/pwn\">Link local</a>"
+                                     "<a href=\"https://example.atlassian.net/foo/wiki/x/abc\">Deep path</a>"
+                                     "<a href=\"https://example.atlassian.net/landing?redirect=/wiki/x/abc\">Query</a>"
+                                     "</article>"))}}
                        requests)]
     (is (= ["1001"] (mapv :external_id (source/discover sys source-cfg))))
-    (is (not-any? #(str/starts-with? (:url %) "https://other.example/") @requests))))
+    (is (not-any? #(or (str/starts-with? (:url %) "https://other.example/")
+                       (str/starts-with? (:url %) "http://169.254.169.254/")
+                       (str/includes? (:url %) "/confluence/shim/x/"))
+                  @requests))))
 
 (deftest api-reports-successful-responses-without-rendered-content
   (let [sys (fake-http {"https://example.atlassian.net/servicedesk/customer/portal/1"
@@ -335,6 +373,17 @@
   (with-redefs [webdriver/discover-rendered (fn [_ cfg]
                                               [(select-keys cfg [:type :url])])]
     (let [sys (fake-http {(:url source-cfg) {:status 200 :body "<html>No payload</html>"}}
+                         (atom []))]
+      (is (= [{:type "webdriver"
+               :url (:url source-cfg)}]
+             (source/discover sys (assoc source-cfg :crawl_method "auto")))))))
+
+(deftest auto-crawl-method-falls-back-when-the-page-api-is-unavailable
+  (with-redefs [webdriver/discover-rendered (fn [_ cfg]
+                                              [(select-keys cfg [:type :url])])]
+    (let [sys (fake-http {(:url source-cfg) {:status 200 :body (portal-page)}
+                          (category-url) {:status 200 :body (rest-view-category-response)}
+                          (page-api-url "1001") {:status 404 :body "not found"}}
                          (atom []))]
       (is (= [{:type "webdriver"
                :url (:url source-cfg)}]

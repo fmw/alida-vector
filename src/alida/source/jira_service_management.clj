@@ -6,7 +6,8 @@
             [clojure.string :as str]
             [com.climate.claypoole :as cp]
             [etaoin.api :as e])
-  (:import [org.jsoup Jsoup]))
+  (:import [java.net URI]
+           [org.jsoup Jsoup]))
 
 (def default-max-pages 1000)
 (def default-max-concurrency 20)
@@ -18,6 +19,10 @@
   (or (seq (:start_urls source-cfg))
       (when-let [url (:start_url source-cfg)] [url])
       (when-let [url (:url source-cfg)] [url])))
+
+(defn- source-origins
+  [source-cfg]
+  (set (keep url/origin (source-urls source-cfg))))
 
 (defn- max-pages
   [source-cfg]
@@ -90,6 +95,7 @@
                        :source-id (:id source-cfg)
                        :url start-url})))
     (let [ctx {:origin (url/origin start-url)
+               :source-origins (source-origins source-cfg)
                :portal-id (or (url/path-id "portal" start-url)
                               (some-> (get-in payload [:portal :id]) str))
                :workspace-id (workspace-id (:body response) payload)
@@ -210,7 +216,7 @@
          vec)))
 
 (defn- resolve-shim-link
-  [sys _source-cfg url]
+  [sys url]
   (try
     (let [response (source/request! sys {:method :get
                                          :url url
@@ -220,33 +226,40 @@
     (catch Exception _
       nil)))
 
+(defn- confluence-short-link-code
+  [href]
+  (let [path (try
+               (.getPath (URI. href))
+               (catch Exception _
+                 nil))]
+    (or (second (re-matches #"/wiki/x/([^/]+)/?" (or path "")))
+        (second
+         (re-matches
+          #"/plugins/servlet/servicedesk/customer/confluence/shim/x/([^/]+)/?"
+          (or path ""))))))
+
 (defn- confluence-short-link-shim
-  [source-cfg href]
+  [ctx href]
   (let [origin (url/origin href)
-        source-origins (set (keep url/origin (source-urls source-cfg)))]
-    (when-let [[_ code] (and (contains? source-origins origin)
-                             (re-find #"/wiki/x/([^/?#]+)" (or href "")))]
+        code (confluence-short-link-code href)]
+    (when (and (contains? (:source-origins ctx) origin)
+               code)
       (str origin
            "/plugins/servlet/servicedesk/customer/confluence/shim/x/"
            code))))
 
 (defn- href-article-id
-  [sys source-cfg href]
+  [sys ctx href]
   (or (url/article-id href)
-      (when-let [shim-url
-                 (if (str/includes?
-                      href
-                      "/plugins/servlet/servicedesk/customer/confluence/shim/x/")
-                   href
-                   (confluence-short-link-shim source-cfg href))]
-        (resolve-shim-link sys source-cfg shim-url))))
+      (some->> (confluence-short-link-shim ctx href)
+               (resolve-shim-link sys))))
 
 (defn- article-links
-  [sys source-cfg base-url body]
+  [sys ctx base-url body]
   (let [document (Jsoup/parse (or body "") base-url)]
     (->> (.select document "a[href]")
          (map #(.absUrl % "href"))
-         (keep #(href-article-id sys source-cfg %))
+         (keep #(href-article-id sys ctx %))
          distinct
          vec)))
 
@@ -282,7 +295,7 @@
                         (:title ref))
              :body raw-body
              :hrefs (mapv #(article-url ctx %)
-                          (article-links sys source-cfg canonical-url raw-body))}
+                          (article-links sys ctx canonical-url raw-body))}
             (source/anomaly
              :cognitect.anomalies/fault
              {:type :alida.source.jira-service-management/article-content-missing
@@ -329,6 +342,29 @@
     (vec (cp/upmap pool #(fetch-article sys source-cfg ctx %) refs))
     (mapv #(fetch-article sys source-cfg ctx %) refs)))
 
+(defn- article-not-found?
+  [item]
+  (= :alida.source.jira-service-management/article-not-found
+     (get-in item [:alida/skipped :type])))
+
+(defn- article-api-unavailable
+  [source-cfg ctx pages]
+  (if (and (seq pages)
+           (every? article-not-found? pages))
+    [(source/anomaly
+      :cognitect.anomalies/fault
+      {:type :alida.source.jira-service-management/article-api-unavailable
+       :source-id (:id source-cfg)
+       :origin (:origin ctx)
+       :status 404
+       :article-count (count pages)})]
+    pages))
+
+(defn- article-api-unavailable?
+  [item]
+  (= :alida.source.jira-service-management/article-api-unavailable
+     (get-in item [:alida/error :type])))
+
 (defn- discover-api-start
   "BFS the portal's article graph. The thread pool (when concurrency > 1) is
    created once for the whole traversal rather than per batch."
@@ -340,7 +376,7 @@
            pages []]
       (if (or (empty? queue)
               (>= (count pages) remaining-pages))
-        pages
+        (article-api-unavailable source-cfg ctx pages)
         (let [remaining (- remaining-pages (count pages))
               batch-size (min remaining (max 1 (max-concurrency source-cfg)) (count queue))
               batch (vec (take batch-size queue))
@@ -613,7 +649,10 @@
   (case (crawl-method source-cfg)
     :webdriver (webdriver/discover-rendered sys (webdriver-source-cfg source-cfg))
     :auto (try
-            (discover-api sys source-cfg)
+            (let [items (discover-api sys source-cfg)]
+              (if (some article-api-unavailable? items)
+                (webdriver/discover-rendered sys (webdriver-source-cfg source-cfg))
+                items))
             (catch Exception _
               (webdriver/discover-rendered sys (webdriver-source-cfg source-cfg))))
     :api (discover-api sys source-cfg)

@@ -141,12 +141,14 @@
     (is (not (str/includes? text "https://example.test/added/50")))
     (is (str/includes? text "5 more in the full report"))))
 
-(deftest slack-blocks-omit-verification-detail-field
+(deftest slack-blocks-omit-llm-validation-for-pass
   (let [blocks (:slack_blocks (report/build (assoc summary
                                                    :verification_verdict "pass"
                                                    :verification {:llm_verdict "pass"
                                                                   :reasoning "No review needed."})))
+        field-texts (mapcat (fn [block] (map :text (:fields block))) blocks)
         block-texts (keep #(get-in % [:text :text]) blocks)]
+    (is (not-any? #(str/includes? % "Verification") field-texts))
     (is (not-any? #(str/includes? % "LLM validation") block-texts))))
 
 (deftest slack-blocks-explain-non-pass-llm-verdicts

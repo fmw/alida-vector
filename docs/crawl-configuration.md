@@ -251,7 +251,16 @@ sources:
 API discovery defaults to `api_max_concurrency: 20`,
 `api_category_page_limit: 100`, and `max_pages: 1000`. If
 `api_max_concurrency` is omitted, `max_concurrency` is used before falling back
-to `20`.
+to `20`. API mode expects an Atlassian Cloud-style portal origin whose
+same-origin `/wiki/api/v2/pages/{id}` endpoint is anonymously readable. Custom
+portal domains or instances that restrict that endpoint should use
+`crawl_method: webdriver` or `crawl_method: auto`; `auto` falls back to the
+rendered crawl when the page API is unavailable.
+
+The Confluence page API supplies the indexed title and rendered body. Switching
+an existing index from the legacy article representation can therefore produce
+a one-time set of changed documents when page titles or rendered link content
+differ, even though the portal URLs remain stable.
 
 Rendered Jira crawls use the specialized Jira render profile and default to five browser workers. The generic WebDriver timeout, restart, retry, wait, cleanup, and URL-scope settings are also accepted. Use `content_wait_selectors` when a portal needs additional readiness signals. Related links inside Jira article iframes are given up to `iframe_related_links_timeout_ms` to stabilize; the default is `5000`.
 
