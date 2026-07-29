@@ -296,6 +296,18 @@
                   :text text}})
         (slack-change-detail-text summary)))
 
+(defn- slack-llm-validation-block
+  [{:keys [verification]}]
+  (let [llm-verdict (:llm_verdict verification)
+        reasoning (str/trim (or (:reasoning verification) ""))]
+    (when (and (#{"caution" "fail"} llm-verdict)
+               (seq reasoning))
+      {:type "section"
+       :text {:type "mrkdwn"
+              :text (truncate (str "*LLM validation (" llm-verdict ")*\n"
+                                   (slack-escape reasoning))
+                              max-slack-section-text-length)}})))
+
 (defn slack-blocks
   [{:keys [run_id index_name lifecycle_status document_count chunk_count error_count skipped_count
            embedding_stats phase_stats] :as summary}]
@@ -324,6 +336,7 @@
               {:type "section"
                :fields (summary-fields summary document_count chunk_count error_count skipped_count embedding_stats)}
               (slack-change-detail-blocks summary)
+              (slack-llm-validation-block summary)
               {:type "section"
                :fields [(field "Crawl time" (str (ms phase_stats :crawl_duration_ms) " ms"))
                         (field "Embedding time" (str (ms phase_stats :embedding_duration_ms) " ms"))]}

@@ -7,7 +7,7 @@ The fixture includes:
 - a normal documentation page as a control
 - crawled prompt-injection text that tells the verifier to return `pass`
 - fake credential-shaped strings
-- unsafe support advice that asks users for passwords, cookies, and MFA codes
+- credential-harvesting support instructions that ask users for passwords, cookies, and MFA codes
 
 All credential-looking strings in the fixture are fake test data.
 

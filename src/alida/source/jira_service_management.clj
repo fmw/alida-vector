@@ -6,22 +6,23 @@
             [clojure.string :as str]
             [com.climate.claypoole :as cp]
             [etaoin.api :as e])
-  (:import [org.jsoup Jsoup]))
+  (:import [java.net URI]
+           [org.jsoup Jsoup]))
 
 (def default-max-pages 1000)
 (def default-max-concurrency 20)
 (def default-webdriver-max-concurrency 5)
 (def default-category-page-limit 100)
 
-;; The article view endpoint negotiates representation on Accept: without it the
-;; gateway returns text/plain (rejected by extraction). Request HTML explicitly.
-(def article-accept-header "text/html")
-
 (defn- source-urls
   [source-cfg]
   (or (seq (:start_urls source-cfg))
       (when-let [url (:start_url source-cfg)] [url])
       (when-let [url (:url source-cfg)] [url])))
+
+(defn- source-origins
+  [source-cfg]
+  (set (keep url/origin (source-urls source-cfg))))
 
 (defn- max-pages
   [source-cfg]
@@ -94,6 +95,7 @@
                        :source-id (:id source-cfg)
                        :url start-url})))
     (let [ctx {:origin (url/origin start-url)
+               :source-origins (source-origins source-cfg)
                :portal-id (or (url/path-id "portal" start-url)
                               (some-> (get-in payload [:portal :id]) str))
                :workspace-id (workspace-id (:body response) payload)
@@ -118,7 +120,7 @@
 
 (defn- article-api-url
   [{:keys [origin]} article-id]
-  (str origin "/rest/servicedesk/knowledgebase/latest/articles/view/" article-id))
+  (str origin "/wiki/api/v2/pages/" article-id "?body-format=view"))
 
 (defn- category-page-limit
   [source-cfg]
@@ -214,7 +216,7 @@
          vec)))
 
 (defn- resolve-shim-link
-  [sys _source-cfg url]
+  [sys url]
   (try
     (let [response (source/request! sys {:method :get
                                          :url url
@@ -224,53 +226,90 @@
     (catch Exception _
       nil)))
 
+(defn- confluence-short-link-code
+  [href]
+  (let [path (try
+               (.getPath (URI. href))
+               (catch Exception _
+                 nil))]
+    (or (second (re-matches #"/wiki/x/([^/]+)/?" (or path "")))
+        (second
+         (re-matches
+          #"/plugins/servlet/servicedesk/customer/confluence/shim/x/([^/]+)/?"
+          (or path ""))))))
+
+(defn- confluence-short-link-shim
+  [ctx href]
+  (let [origin (url/origin href)
+        code (confluence-short-link-code href)]
+    (when (and (contains? (:source-origins ctx) origin)
+               code)
+      (str origin
+           "/plugins/servlet/servicedesk/customer/confluence/shim/x/"
+           code))))
+
 (defn- href-article-id
-  [sys source-cfg href]
+  [sys ctx href]
   (or (url/article-id href)
-      (when (str/includes? href "/plugins/servlet/servicedesk/customer/confluence/shim/x/")
-        (resolve-shim-link sys source-cfg href))))
+      (some->> (confluence-short-link-shim ctx href)
+               (resolve-shim-link sys))))
 
 (defn- article-links
-  [sys source-cfg base-url body]
+  [sys ctx base-url body]
   (let [document (Jsoup/parse (or body "") base-url)]
     (->> (.select document "a[href]")
          (map #(.absUrl % "href"))
-         (keep #(href-article-id sys source-cfg %))
+         (keep #(href-article-id sys ctx %))
          distinct
          vec)))
 
-(defn- article-title
-  [fallback-title body]
-  (or fallback-title
-      (let [document (Jsoup/parse (or body "") "")
-            heading (.selectFirst document "h1")]
-        (some-> heading .text str/trim not-empty))))
+(defn- article-payload
+  [response]
+  (try
+    (read-json (:body response))
+    (catch Exception _
+      nil)))
 
-(defn- article-response
-  [sys url]
-  (let [response (source/request! sys {:method :get :url url
-                                       :headers {"Accept" article-accept-header}})]
-    (if (= 406 (:status response))
-      (source/request! sys {:method :get :url url
-                            :headers {"Accept" "application/json"}})
-      response)))
+(defn- article-body
+  [payload]
+  (get-in payload [:body :view :value]))
 
 (defn- fetch-article
   [sys source-cfg ctx ref]
   (let [id (:article_id ref)
         url (article-api-url ctx id)
         canonical-url (or (:canonical_url ref) (article-url ctx id))
-        response (article-response sys url)]
+        response (source/request! sys {:method :get
+                                       :url url
+                                       :headers {"Accept" "application/json"}})]
     (if (source/successful-status? (:status response))
-      {:source_id (:id source-cfg)
-       :source_type (:type source-cfg)
-       :external_id id
-       :canonical_url canonical-url
-       :content_type (or (source/header response "Content-Type") "text/html")
-       :title (article-title (:title ref) (:body response))
-       :body (:body response)
-       :hrefs (mapv #(article-url ctx %)
-                    (article-links sys source-cfg canonical-url (:body response)))}
+      (if-let [payload (article-payload response)]
+        (let [raw-body (article-body payload)]
+          (if (string? raw-body)
+            {:source_id (:id source-cfg)
+             :source_type (:type source-cfg)
+             :external_id id
+             :canonical_url canonical-url
+             :content_type "text/html"
+             :title (or (some-> (:title payload) str/trim not-empty)
+                        (:title ref))
+             :body raw-body
+             :hrefs (mapv #(article-url ctx %)
+                          (article-links sys ctx canonical-url raw-body))}
+            (source/anomaly
+             :cognitect.anomalies/fault
+             {:type :alida.source.jira-service-management/article-content-missing
+              :source-id (:id source-cfg)
+              :canonical-url canonical-url
+              :article-id id
+              :status (:status response)})))
+        (source/anomaly
+         :cognitect.anomalies/fault
+         {:type :alida.source.jira-service-management/article-response-invalid
+          :source-id (:id source-cfg)
+          :canonical-url canonical-url
+          :article-id id
+          :status (:status response)}))
       (if (= 404 (:status response))
         (source/skipped {:type :alida.source.jira-service-management/article-not-found
                          :source-id (:id source-cfg)
@@ -303,6 +342,29 @@
     (vec (cp/upmap pool #(fetch-article sys source-cfg ctx %) refs))
     (mapv #(fetch-article sys source-cfg ctx %) refs)))
 
+(defn- article-not-found?
+  [item]
+  (= :alida.source.jira-service-management/article-not-found
+     (get-in item [:alida/skipped :type])))
+
+(defn- article-api-unavailable
+  [source-cfg ctx pages]
+  (if (and (seq pages)
+           (every? article-not-found? pages))
+    [(source/anomaly
+      :cognitect.anomalies/fault
+      {:type :alida.source.jira-service-management/article-api-unavailable
+       :source-id (:id source-cfg)
+       :origin (:origin ctx)
+       :status 404
+       :article-count (count pages)})]
+    pages))
+
+(defn- article-api-unavailable?
+  [item]
+  (= :alida.source.jira-service-management/article-api-unavailable
+     (get-in item [:alida/error :type])))
+
 (defn- discover-api-start
   "BFS the portal's article graph. The thread pool (when concurrency > 1) is
    created once for the whole traversal rather than per batch."
@@ -314,7 +376,7 @@
            pages []]
       (if (or (empty? queue)
               (>= (count pages) remaining-pages))
-        pages
+        (article-api-unavailable source-cfg ctx pages)
         (let [remaining (- remaining-pages (count pages))
               batch-size (min remaining (max 1 (max-concurrency source-cfg)) (count queue))
               batch (vec (take batch-size queue))
@@ -587,7 +649,10 @@
   (case (crawl-method source-cfg)
     :webdriver (webdriver/discover-rendered sys (webdriver-source-cfg source-cfg))
     :auto (try
-            (discover-api sys source-cfg)
+            (let [items (discover-api sys source-cfg)]
+              (if (some article-api-unavailable? items)
+                (webdriver/discover-rendered sys (webdriver-source-cfg source-cfg))
+                items))
             (catch Exception _
               (webdriver/discover-rendered sys (webdriver-source-cfg source-cfg))))
     :api (discover-api sys source-cfg)
