@@ -91,6 +91,8 @@ MIT
 
 ## History
 
-Alida Vector is a continuation of [Alida](https://github.com/fmw/alida/), a Clojure and Apache Lucene project I built for a presentation at EuroClojure 2012 in London.
+Alida Vector is a continuation of [Alida](https://github.com/fmw/alida/), a
+Clojure and Apache Lucene project I built for a
+[presentation at EuroClojure 2012 in London](https://www.youtube.com/watch?v=OezmEuxTQhM).
 
 The project is named after [my grandmother](https://www.youtube.com/watch?v=UyGlPaDqgpI), who has always been a great archivist.

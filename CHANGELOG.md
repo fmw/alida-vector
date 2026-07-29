@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.1.3 - 2026-07-29
+
+- Fetch Jira Service Management article titles and rendered bodies from the
+  Confluence v2 pages API, preserving useful link content in indexed documents.
+- Restrict Confluence short-link resolution to configured source origins.
+- Detect a complete page-API collapse and let `auto` mode fall back to the
+  rendered crawler.
+- Focus LLM verification on crawl correctness and safety instead of editorial
+  quality.
+- Include LLM reasoning in Slack notifications for caution and fail verdicts.
+
 ## 0.1.2 - 2026-07-23
 
 - Preserve document-level added, changed, and moved metadata across batched LLM
