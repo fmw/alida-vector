@@ -136,6 +136,11 @@ Run `migrate` during deployment before scheduling recurring crawls, or use an
 init job controlled by your deployment system. The recurring CronJob should run
 `crawl` against mounted config and injected secrets.
 
+When multiple environments should reuse an identical LLM verification, migrate
+every metadata database and configure the later environment as described in
+[Verification Attestations](verification-attestations.md). Give the later
+environment read-only credentials for each trusted metadata database.
+
 Generic Kubernetes manifests are available in
 [`deploy/kubernetes`](../deploy/kubernetes). Copy them into your deployment
 repository and replace the placeholder image digest, config, and secret values

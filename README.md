@@ -79,6 +79,8 @@ For client SQL against activated indexes, see [Live Query Contract](docs/live-qu
 
 For development-time verifier checks with intentionally unsafe local content, see [LLM Verification Fixture](docs/llm-verification-fixture.md).
 
+For deterministic verifier caching and reuse between environments, see [Verification Attestations](docs/verification-attestations.md).
+
 For container and Kubernetes deployment notes, see [Deployment](docs/deployment.md).
 
 ## Contact

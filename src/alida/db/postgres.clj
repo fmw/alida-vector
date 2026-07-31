@@ -36,6 +36,24 @@
     (.setType "jsonb")
     (.setValue (if (string? value) value (json/write-str value)))))
 
+(defn- jsonb-value
+  [value]
+  (cond
+    (instance? PGobject value)
+    (json/read-str (.getValue ^PGobject value) :key-fn keyword)
+
+    (string? value)
+    (json/read-str value :key-fn keyword)
+
+    :else value))
+
+(defn- decode-attestation
+  [row]
+  (some-> row
+          (update :llm_findings jsonb-value)
+          (update :llm_security_findings jsonb-value)
+          (update :raw_response jsonb-value)))
+
 (defn- require-lifecycle-status!
   [status]
   (when-not (contains? lifecycle-statuses status)
@@ -318,7 +336,8 @@
 
 (defn save-verification!
   [connectable value {:keys [provider model deterministic_verdict deterministic_findings llm_verdict
-                             final_verdict reasoning llm_security_findings raw_response]}]
+                             final_verdict reasoning llm_security_findings raw_response
+                             verification_input_hash llm_result_source attestation_attestor]}]
   (require-verdict! deterministic_verdict)
   (when llm_verdict
     (require-verdict! llm_verdict))
@@ -326,10 +345,11 @@
     (require-verdict! final_verdict))
   (jdbc/execute-one!
    connectable
-   ["INSERT INTO alida_verifications
+    ["INSERT INTO alida_verifications
        (run_id, provider, model, deterministic_verdict, deterministic_findings, llm_verdict,
-        final_verdict, reasoning, llm_security_findings, raw_response)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        final_verdict, reasoning, llm_security_findings, raw_response, verification_input_hash,
+        llm_result_source, attestation_attestor)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (run_id) DO UPDATE
      SET provider = EXCLUDED.provider,
          model = EXCLUDED.model,
@@ -340,6 +360,9 @@
          reasoning = EXCLUDED.reasoning,
          llm_security_findings = EXCLUDED.llm_security_findings,
          raw_response = EXCLUDED.raw_response,
+         verification_input_hash = EXCLUDED.verification_input_hash,
+         llm_result_source = EXCLUDED.llm_result_source,
+         attestation_attestor = EXCLUDED.attestation_attestor,
          created_at = now()
      RETURNING *"
     (run-id value)
@@ -351,7 +374,10 @@
     final_verdict
     reasoning
     (jsonb (or llm_security_findings []))
-    (jsonb (or raw_response {}))]
+    (jsonb (or raw_response {}))
+    verification_input_hash
+    llm_result_source
+    attestation_attestor]
    jdbc-opts))
 
 (defn get-verification
@@ -359,6 +385,79 @@
   (jdbc/execute-one!
    connectable
    ["SELECT * FROM alida_verifications WHERE run_id = ?" (run-id value)]
+   jdbc-opts))
+
+(defn find-verification-attestation
+  [connectable verification-input-hash attestors]
+  (when (seq attestors)
+    (with-connection
+      connectable
+      (fn [conn]
+        (let [attestors-array (text-array conn attestors)]
+          (decode-attestation
+           (jdbc/execute-one!
+            conn
+            ["SELECT *
+              FROM alida_verification_attestations
+              WHERE verification_input_hash = ?
+                AND attestor = ANY(?)
+              ORDER BY array_position(?, attestor), created_at DESC
+              LIMIT 1"
+             verification-input-hash
+             attestors-array
+             attestors-array]
+            jdbc-opts)))))))
+
+(defn save-verification-attestation!
+  [connectable {:keys [verification_input_hash attestor provider model prompt_policy_version
+                       deterministic_gate_version verification_input_version llm_verdict reasoning
+                       llm_findings llm_security_findings raw_response]}]
+  (require-verdict! llm_verdict)
+  (jdbc/execute-one!
+   connectable
+   ["INSERT INTO alida_verification_attestations
+       (verification_input_hash, attestor, provider, model, prompt_policy_version,
+        deterministic_gate_version, verification_input_version, llm_verdict, reasoning,
+        llm_findings, llm_security_findings, raw_response)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (verification_input_hash, attestor) DO UPDATE
+     SET provider = EXCLUDED.provider,
+         model = EXCLUDED.model,
+         prompt_policy_version = EXCLUDED.prompt_policy_version,
+         deterministic_gate_version = EXCLUDED.deterministic_gate_version,
+         verification_input_version = EXCLUDED.verification_input_version,
+         llm_verdict = EXCLUDED.llm_verdict,
+         reasoning = EXCLUDED.reasoning,
+         llm_findings = EXCLUDED.llm_findings,
+         llm_security_findings = EXCLUDED.llm_security_findings,
+         raw_response = EXCLUDED.raw_response,
+         created_at = now(),
+         last_used_at = now()
+     RETURNING *"
+    verification_input_hash
+    attestor
+    provider
+    model
+    (or prompt_policy_version "")
+    (or deterministic_gate_version "")
+    verification_input_version
+    llm_verdict
+    reasoning
+    (jsonb (or llm_findings []))
+    (jsonb (or llm_security_findings []))
+    (jsonb (or raw_response {}))]
+   jdbc-opts))
+
+(defn touch-verification-attestation!
+  [connectable verification-input-hash attestor]
+  (jdbc/execute-one!
+   connectable
+   ["UPDATE alida_verification_attestations
+     SET last_used_at = now()
+     WHERE verification_input_hash = ? AND attestor = ?
+     RETURNING verification_input_hash, attestor, last_used_at"
+    verification-input-hash
+    attestor]
    jdbc-opts))
 
 (defn- vector-literal

@@ -184,6 +184,45 @@
                        :value v}))))
   config)
 
+(defn- validate-verification-attestations!
+  [config]
+  (let [{:keys [attestor trusted_sources]}
+        (get-in config [:verification :attestations])
+        source-names (map :name trusted_sources)]
+    (when (and (some? attestor) (str/blank? attestor))
+      (throw (ex-info "Invalid verification attestations config: attestor must not be blank"
+                      {:type :alida.config/invalid-verification-attestations
+                       :key :attestor})))
+    (when-not (= (count source-names) (count (distinct source-names)))
+      (throw (ex-info "Invalid verification attestations config: trusted source names must be unique"
+                      {:type :alida.config/invalid-verification-attestations
+                       :key :trusted_sources})))
+    (doseq [{:keys [name attestors max_pool_size]} trusted_sources]
+      (when (str/blank? name)
+        (throw (ex-info "Invalid verification attestations config: trusted source name must not be blank"
+                        {:type :alida.config/invalid-verification-attestations
+                         :key :name})))
+      (when-not (seq attestors)
+        (throw (ex-info (str "Invalid verification attestations config: trusted source " name
+                             " requires at least one attestor")
+                        {:type :alida.config/invalid-verification-attestations
+                         :source name
+                         :key :attestors})))
+      (when (some str/blank? attestors)
+        (throw (ex-info (str "Invalid verification attestations config: trusted source " name
+                             " contains a blank attestor")
+                        {:type :alida.config/invalid-verification-attestations
+                         :source name
+                         :key :attestors})))
+      (when (and (some? max_pool_size) (not (pos-int? max_pool_size)))
+        (throw (ex-info (str "Invalid verification attestations config: trusted source " name
+                             " max_pool_size must be positive")
+                        {:type :alida.config/invalid-verification-attestations
+                         :source name
+                         :key :max_pool_size
+                         :value max_pool_size})))))
+  config)
+
 (defn- validate-retention!
   [config]
   (when-let [max-age-days (get-in config [:retention :max_age_days])]
@@ -495,6 +534,7 @@
                    validate-retention!
                    validate-required-verification-keys!
                    validate-verification-options!
+                   validate-verification-attestations!
                    validate-indexes!)]
     (assoc config
            :alida.config/path (str path)
