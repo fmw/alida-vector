@@ -262,6 +262,12 @@ an existing index from the legacy article representation can therefore produce
 a one-time set of changed documents when page titles or rendered link content
 differ, even though the portal URLs remain stable.
 
+API and rendered Jira crawls preserve links to non-internal hosts as Markdown
+by default, including standalone embedded-content links. Set
+`preserve_external_links: false` to disable that Markdown conversion, or add
+trusted hosts to `internal_link_hosts` when they should not be represented as
+external links.
+
 Rendered Jira crawls use the specialized Jira render profile and default to five browser workers. The generic WebDriver timeout, restart, retry, wait, cleanup, and URL-scope settings are also accepted. Use `content_wait_selectors` when a portal needs additional readiness signals. Related links inside Jira article iframes are given up to `iframe_related_links_timeout_ms` to stabilize; the default is `5000`.
 
 As with website sources, configure `allowed_url_prefixes` explicitly. The Jira API connector does not derive an allowlist from the portal URL.

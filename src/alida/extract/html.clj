@@ -1,8 +1,9 @@
 (ns alida.extract.html
   (:require [alida.text :as text]
+            [alida.url :as url]
             [clojure.string :as str])
   (:import [org.jsoup Jsoup]
-           [org.jsoup.nodes Element]
+           [org.jsoup.nodes Element TextNode]
            [org.jsoup.select NodeTraversor NodeVisitor]))
 
 (def block-tags
@@ -20,6 +21,57 @@
    "meta[property=og:locale]"
    "meta[name=language]"
    "meta[name=dc.language]"])
+
+(def ^:private external-link-source-types
+  #{"jira-service-management" "webdriver"})
+
+(defn- preserve-external-links?
+  [source-cfg]
+  (and (contains? external-link-source-types (:type source-cfg))
+       (not= false (:preserve_external_links source-cfg))))
+
+(defn- internal-link-hosts
+  [source-cfg canonical-url]
+  (set
+   (keep (fn [host]
+           (some-> host str/trim not-empty str/lower-case))
+         (concat [(url/host canonical-url)]
+                 (:internal_link_hosts source-cfg)))))
+
+(defn- inside-block?
+  [^Element element]
+  (loop [parent (.parent element)]
+    (cond
+      (nil? parent) false
+      (contains? block-tags (.normalName parent)) true
+      :else (recur (.parent parent)))))
+
+(defn- external-link-markdown
+  [internal-hosts ^Element element]
+  (let [href (not-empty (.absUrl element "href"))
+        link-text (some-> (.text element) text/normalize-text not-empty)
+        host (url/http-host href)]
+    (when (and href
+               link-text
+               host
+               (not (contains? internal-hosts host)))
+      (str "[" link-text "](" href ")"))))
+
+(defn- replace-external-link!
+  [^Element element markdown]
+  (let [replacement (if (inside-block? element)
+                      (TextNode. markdown)
+                      (doto (Element. "p")
+                        (.text markdown)))]
+    (.replaceWith element replacement)))
+
+(defn- preserve-external-links!
+  [document source-cfg canonical-url]
+  (let [internal-hosts (internal-link-hosts source-cfg canonical-url)]
+    (doseq [element (vec (.select document "a[href]"))]
+      (when-let [markdown (external-link-markdown internal-hosts element)]
+        (replace-external-link! element markdown))))
+  document)
 
 (defn- heading-level
   [tag]
@@ -111,6 +163,8 @@
         language-selectors (or (seq (get-in source-cfg [:language :html_selectors]))
                                default-language-selectors)
         document-html-locale (html-locale document language-selectors)]
+    (when (preserve-external-links? source-cfg)
+      (preserve-external-links! document source-cfg canonical_url))
     (apply-remove-selectors! document selectors)
     (let [document-title (or title
                              (some-> (.title document) text/normalize-text not-empty))
