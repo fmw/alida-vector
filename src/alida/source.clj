@@ -1,17 +1,51 @@
 (ns alida.source
-  (:require [clojure.string]
+  (:require [alida.url :as url]
+            [clojure.string :as str]
             [hato.client :as http]))
 
 (def default-request-timeout-ms 60000)
 (def max-error-body-length 1024)
 
+(defn source-urls
+  "Configured start URLs in precedence order: start_urls, start_url, then url."
+  [source-cfg]
+  (or (seq (:start_urls source-cfg))
+      (when-let [url (:start_url source-cfg)] [url])
+      (when-let [url (:url source-cfg)] [url])))
+
+(defn internal-link-hosts
+  "Normalized hosts trusted by a URL-backed source: every configured start URL
+  host plus explicit internal_link_hosts."
+  [source-cfg]
+  (->> (concat (keep url/host (source-urls source-cfg))
+               (:internal_link_hosts source-cfg))
+       (keep (fn [host]
+               (some-> host str/trim not-empty str/lower-case)))
+       distinct
+       vec))
+
+(defn external-link-extraction-options
+  [source-cfg]
+  {:preserve-external-links? (not= false (:preserve_external_links source-cfg))
+   :internal-hosts (set (internal-link-hosts source-cfg))})
+
+(defn- source-type
+  [source-cfg]
+  (keyword (:type source-cfg)))
+
 (defn- dispatch-type
   [_sys source-cfg & _]
-  (keyword (:type source-cfg)))
+  (source-type source-cfg))
 
 (defmulti discover dispatch-type)
 
 (defmulti fetch dispatch-type)
+
+(defmulti html-extraction-options source-type)
+
+(defmethod html-extraction-options :default
+  [_source-cfg]
+  {})
 
 (defmethod discover :default
   [_sys source-cfg]
@@ -62,7 +96,7 @@
   [response header-name]
   (let [headers (:headers response)]
     (or (get headers header-name)
-        (get headers (clojure.string/lower-case header-name)))))
+        (get headers (str/lower-case header-name)))))
 
 (defn status-category
   "Map an HTTP status to a cognitect anomaly category (404 -> not-found, else fault)."

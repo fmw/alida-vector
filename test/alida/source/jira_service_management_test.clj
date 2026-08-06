@@ -268,7 +268,9 @@
                        (atom []))
         items (source/discover sys source-cfg)
         first-article (first (filter #(= "1001" (:external_id %)) items))
-        extracted (html/extract source-cfg first-article)]
+        extracted (html/extract source-cfg
+                                (source/html-extraction-options source-cfg)
+                                first-article)]
     (is (= #{"1001" "1003"} (set (mapv :external_id items))))
     (is (str/includes? (:normalized_content extracted)
                        "https://player.example/video/1003"))))

@@ -167,16 +167,17 @@
      nil)))
 
 (defn- html-fragment-blocks
-  [source-cfg canonical-url html-body]
+  [source-cfg html-extraction-options canonical-url html-body]
   (:blocks (html/extract source-cfg
+                         html-extraction-options
                          {:canonical_url canonical-url
                           :content_type "text/html"
                           :body html-body})))
 
 (defn- html-field-blocks
-  [source-cfg canonical-url json-value]
+  [source-cfg html-extraction-options canonical-url json-value]
   (->> (html-field-values* (:json_extract source-cfg) json-value)
-       (mapcat #(html-fragment-blocks source-cfg canonical-url %))
+       (mapcat #(html-fragment-blocks source-cfg html-extraction-options canonical-url %))
        vec))
 
 (defn- basename
@@ -199,7 +200,7 @@
           (mapping-value mappings token))))))
 
 (defn- selected-html-json-extraction
-  [source-cfg {:keys [body canonical_url title]}]
+  [source-cfg html-extraction-options {:keys [body canonical_url title]}]
   (try
     (let [json-value (json/read-str (or body "null"))
           extracted-title (when-let [path (seq (get-in source-cfg [:json_extract :title_path]))]
@@ -207,22 +208,25 @@
           html-locale (locale-from-filename source-cfg title)]
       {:title (or extracted-title title)
        :html_locale html-locale
-       :blocks (html-field-blocks source-cfg canonical_url json-value)})
+       :blocks (html-field-blocks source-cfg
+                                  html-extraction-options
+                                  canonical_url
+                                  json-value)})
     (catch Exception _
       {:title title
        :blocks (paragraph-blocks body)})))
 
 (defn- json-extraction
-  [source-cfg document]
+  [source-cfg html-extraction-options document]
   (case (or (get-in source-cfg [:json_extract :mode]) "all")
-    "html-fields" (selected-html-json-extraction source-cfg document)
+    "html-fields" (selected-html-json-extraction source-cfg html-extraction-options document)
     "all" {:title (:title document)
            :blocks (json-blocks (:body document))}
     {:title (:title document)
      :blocks (json-blocks (:body document))}))
 
 (defn- blocks
-  [source-cfg content-type document]
+  [source-cfg html-extraction-options content-type document]
   (let [content-type (str/lower-case (or content-type ""))]
     (cond
       (str/starts-with? content-type "text/markdown")
@@ -230,7 +234,7 @@
        :blocks (markdown-blocks (:body document))}
 
       (str/starts-with? content-type "application/json")
-      (json-extraction source-cfg document)
+      (json-extraction source-cfg html-extraction-options document)
 
       :else
       {:title (:title document)
@@ -248,22 +252,27 @@
   (update block :text #(text/normalize-text (strip-boilerplate % (:strip_text source-cfg)))))
 
 (defn extract
-  [source-cfg {:keys [body canonical_url title content_type]}]
-  (let [{:keys [blocks title html_locale]} (blocks source-cfg
-                                                  content_type
-                                                  {:body body
-                                                   :canonical_url canonical_url
-                                                   :title title})
-        blocks (->> blocks
-                    (map #(clean-block source-cfg %))
-                    (remove (comp str/blank? :text))
-                    vec)
-        normalized-content (text/normalize-text (str/join "\n\n" (map :text blocks)))]
-    (cond-> {:canonical_url canonical_url
-             :title title
-             :content_type content_type
-             :raw_content_hash (text/sha-256 (or body ""))
-             :normalized_content normalized-content
-             :normalized_content_hash (text/sha-256 normalized-content)
-             :blocks blocks}
-      html_locale (assoc :html_locale html_locale))))
+  ([source-cfg document]
+   (extract source-cfg {} document))
+  ([source-cfg
+    html-extraction-options
+    {:keys [body canonical_url title content_type]}]
+   (let [{:keys [blocks title html_locale]} (blocks source-cfg
+                                                   html-extraction-options
+                                                   content_type
+                                                   {:body body
+                                                    :canonical_url canonical_url
+                                                    :title title})
+         blocks (->> blocks
+                     (map #(clean-block source-cfg %))
+                     (remove (comp str/blank? :text))
+                     vec)
+         normalized-content (text/normalize-text (str/join "\n\n" (map :text blocks)))]
+     (cond-> {:canonical_url canonical_url
+              :title title
+              :content_type content_type
+              :raw_content_hash (text/sha-256 (or body ""))
+              :normalized_content normalized-content
+              :normalized_content_hash (text/sha-256 normalized-content)
+              :blocks blocks}
+       html_locale (assoc :html_locale html_locale)))))

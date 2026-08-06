@@ -1,8 +1,9 @@
 (ns alida.extract.html
   (:require [alida.text :as text]
+            [alida.url :as url]
             [clojure.string :as str])
   (:import [org.jsoup Jsoup]
-           [org.jsoup.nodes Element]
+           [org.jsoup.nodes Element TextNode]
            [org.jsoup.select NodeTraversor NodeVisitor]))
 
 (def block-tags
@@ -20,6 +21,44 @@
    "meta[property=og:locale]"
    "meta[name=language]"
    "meta[name=dc.language]"])
+
+(defn- inside-block?
+  [^Element element]
+  (loop [parent (.parent element)]
+    (cond
+      (nil? parent) false
+      (contains? block-tags (.normalName parent)) true
+      :else (recur (.parent parent)))))
+
+(defn- escape-markdown-link-text
+  [link-text]
+  (str/replace link-text #"[\\\[\]]" #(str "\\" %)))
+
+(defn- external-link-markdown
+  [internal-hosts ^Element element]
+  (let [href (not-empty (.absUrl element "href"))
+        link-text (some-> (.text element) text/normalize-text not-empty)
+        host (url/http-host href)]
+    (when (and href
+               link-text
+               host
+               (not (contains? internal-hosts host)))
+      (str "[" (escape-markdown-link-text link-text) "](<" href ">)"))))
+
+(defn- replace-external-link!
+  [^Element element markdown]
+  (let [replacement (if (inside-block? element)
+                      (TextNode. markdown)
+                      (doto (Element. "p")
+                        (.text markdown)))]
+    (.replaceWith element replacement)))
+
+(defn- preserve-external-links!
+  [document internal-hosts]
+  (doseq [element (vec (.select document "a[href]"))]
+    (when-let [markdown (external-link-markdown internal-hosts element)]
+      (replace-external-link! element markdown)))
+  document)
 
 (defn- heading-level
   [tag]
@@ -104,29 +143,36 @@
 (defn extract
   "Extract semantic text blocks from HTML.
 
-  source-cfg may contain :remove_selectors and :strip_text entries."
-  [source-cfg {:keys [body canonical_url title content_type]}]
-  (let [document (Jsoup/parse (or body "") (or canonical_url ""))
-        selectors (concat default-remove-selectors (:remove_selectors source-cfg))
-        language-selectors (or (seq (get-in source-cfg [:language :html_selectors]))
-                               default-language-selectors)
-        document-html-locale (html-locale document language-selectors)]
-    (apply-remove-selectors! document selectors)
-    (let [document-title (or title
-                             (some-> (.title document) text/normalize-text not-empty))
-          blocks (->> (traverse-blocks (.body document))
-                      (map (fn [block]
-                             (update block :text strip-boilerplate (:strip_text source-cfg))))
-                      (map (fn [block]
-                             (update block :text text/normalize-text)))
-                      (remove (comp str/blank? :text))
-                      vec)
-          normalized-content (text/normalize-text (str/join "\n\n" (map :text blocks)))]
-      {:canonical_url canonical_url
-       :title document-title
-       :content_type content_type
-       :html_locale document-html-locale
-       :raw_content_hash (text/sha-256 (or body ""))
-       :normalized_content normalized-content
-       :normalized_content_hash (text/sha-256 normalized-content)
-       :blocks blocks})))
+  source-cfg may contain :remove_selectors and :strip_text entries. Resolved
+  extraction-options may contain :preserve-external-links? and :internal-hosts."
+  ([source-cfg page]
+   (extract source-cfg {} page))
+  ([source-cfg
+    {:keys [preserve-external-links? internal-hosts]}
+    {:keys [body canonical_url title content_type]}]
+   (let [document (Jsoup/parse (or body "") (or canonical_url ""))
+         selectors (concat default-remove-selectors (:remove_selectors source-cfg))
+         language-selectors (or (seq (get-in source-cfg [:language :html_selectors]))
+                                default-language-selectors)
+         document-html-locale (html-locale document language-selectors)]
+     (when preserve-external-links?
+       (preserve-external-links! document (set internal-hosts)))
+     (apply-remove-selectors! document selectors)
+     (let [document-title (or title
+                              (some-> (.title document) text/normalize-text not-empty))
+           blocks (->> (traverse-blocks (.body document))
+                       (map (fn [block]
+                              (update block :text strip-boilerplate (:strip_text source-cfg))))
+                       (map (fn [block]
+                              (update block :text text/normalize-text)))
+                       (remove (comp str/blank? :text))
+                       vec)
+           normalized-content (text/normalize-text (str/join "\n\n" (map :text blocks)))]
+       {:canonical_url canonical_url
+        :title document-title
+        :content_type content_type
+        :html_locale document-html-locale
+        :raw_content_hash (text/sha-256 (or body ""))
+        :normalized_content normalized-content
+        :normalized_content_hash (text/sha-256 normalized-content)
+        :blocks blocks}))))
