@@ -875,9 +875,9 @@
                                       WHERE id = ?"
                                      (:id prunable)])
                      (let [pruned (db/prune-runs! ds
-                                                  {:older-than (.minus (java.time.Instant/now)
+                                                   {:older-than (.minus (java.time.Instant/now)
                                                                        (java.time.Duration/ofDays 30))
-                                                   :index-names ["docs"]})]
+                                                   :index-names [(:name index-cfg)]})]
                        {:pruned pruned
                         :attestations (jdbc/execute!
                                        ds

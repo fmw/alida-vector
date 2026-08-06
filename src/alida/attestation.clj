@@ -47,9 +47,6 @@
                            local-ds
                            verification-input-hash
                            [(attestor verification-cfg)])]
-          (db/touch-verification-attestation! local-ds
-                                              verification-input-hash
-                                              (:attestor record))
           {:llm-result (attestation->llm-result record)
            :source "cache"
            :attestor (:attestor record)}))))

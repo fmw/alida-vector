@@ -52,22 +52,17 @@
     (is @closed?)))
 
 (deftest local-cache-is-used-when-no-trusted-attestation-matches
-  (let [touched (atom nil)
-        verification-cfg {:attestations {:attestor "candidate"}}]
+  (let [verification-cfg {:attestations {:attestor "candidate"}}]
     (with-redefs [db/find-verification-attestation
                   (fn [ds input-hash attestors]
                     (is (= :local-ds ds))
                     (is (= "input-hash" input-hash))
                     (is (= ["candidate"] attestors))
-                    (assoc cached-record :attestor "candidate"))
-                  db/touch-verification-attestation!
-                  (fn [ds input-hash attestor]
-                    (reset! touched [ds input-hash attestor]))]
+                    (assoc cached-record :attestor "candidate"))]
       (is (= "cache"
              (:source (attestation/find-result :local-ds
                                                verification-cfg
-                                               "input-hash"))))
-      (is (= [:local-ds "input-hash" "candidate"] @touched)))))
+                                               "input-hash")))))))
 
 (deftest provider-results-are-saved-as-local-attestations
   (let [saved (atom nil)

@@ -449,18 +449,6 @@
     (jsonb (or raw_response {}))]
    jdbc-opts))
 
-(defn touch-verification-attestation!
-  [connectable verification-input-hash attestor]
-  (jdbc/execute-one!
-   connectable
-   ["UPDATE alida_verification_attestations
-     SET last_used_at = now()
-     WHERE verification_input_hash = ? AND attestor = ?
-     RETURNING verification_input_hash, attestor, last_used_at"
-    verification-input-hash
-    attestor]
-   jdbc-opts))
-
 (defn prune-unreferenced-verification-attestations!
   [connectable references]
   (if (seq references)
