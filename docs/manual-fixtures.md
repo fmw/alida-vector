@@ -65,6 +65,7 @@ verification:
   provider: openai
   model: gpt-5.6-terra
   api_key: test
+  reasoning_effort: low
 
 indexes:
   - name: fixture-crawl
