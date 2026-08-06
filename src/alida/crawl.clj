@@ -1,5 +1,6 @@
 (ns alida.crawl
-  (:require [alida.chunk :as chunk]
+  (:require [alida.attestation :as attestation]
+            [alida.chunk :as chunk]
             [alida.db.postgres :as db]
             [alida.diff :as diff]
             [alida.embed :as embed]
@@ -575,12 +576,6 @@
          (filter #(contains? wanted (document-key (:document %))))
          (mapv verification-document))))
 
-(defn- verifier-model
-  [verification-cfg]
-  (or (:model verification-cfg)
-      (:deployment_name verification-cfg)
-      (:provider verification-cfg)))
-
 (defn- llm-verification-enabled?
   [verification-cfg]
   (not= false (:enabled verification-cfg)))
@@ -593,6 +588,45 @@
    :security_findings (vec (mapcat #(or (:security_findings %) []) results))
    :raw_response {:batches (mapv :raw_response results)}})
 
+(defn- complete-llm-verification!
+  [sys verification-cfg run prompts]
+  (combined-llm-result
+   (mapv (fn [index prompt]
+           (when (and (pos? index)
+                      (pos? (or (:inter_prompt_delay_ms verification-cfg)
+                                verify/default-inter-prompt-delay-ms)))
+             (retry/sleep! sys
+                           (or (:inter_prompt_delay_ms verification-cfg)
+                               verify/default-inter-prompt-delay-ms)))
+           (u/log ::verification-prompt-start
+                  :index-name (:index_name run)
+                  :run-id (:id run)
+                  :prompt-number (inc index)
+                  :prompt-count (count prompts))
+           (verify/complete-with-retries sys verification-cfg prompt))
+         (range)
+         prompts)))
+
+(defn- resolve-llm-verification!
+  [sys ds verification-cfg run prompts]
+  (let [verification-input-hash (verify/verification-input-hash verification-cfg prompts)]
+    (if-let [cached (attestation/find-result ds verification-cfg verification-input-hash)]
+      (do
+        (u/log ::verification-attestation-reused
+               :index-name (:index_name run)
+               :run-id (:id run)
+               :verification-input-hash verification-input-hash
+               :llm-result-source (:source cached)
+               :attestor (:attestor cached))
+        (assoc cached :verification-input-hash verification-input-hash))
+      (let [llm-result (complete-llm-verification! sys verification-cfg run prompts)
+            local-attestor (when (attestation/enabled? verification-cfg)
+                             (attestation/attestor verification-cfg))]
+        {:llm-result llm-result
+         :verification-input-hash verification-input-hash
+         :source "provider"
+         :attestor local-attestor}))))
+
 (defn- notification-label
   [sys]
   (not-empty (str/trim (or (get-in sys [:alida/config :notifications :label]) ""))))
@@ -600,35 +634,20 @@
 (defn- verify-run!
   [sys ds run run-diff deterministic-verification source-results]
   (let [verification-cfg (:verification (:alida/config sys))
-        llm-result (when (llm-verification-enabled? verification-cfg)
-                     (let [prompts (verify/build-prompts
-                                    {:run_id (:id run)
-                                     :index_name (:index_name run)
-                                     :deterministic_verification deterministic-verification
-                                     :diff run-diff
-                                     :documents (verification-documents source-results run-diff)
-                                     :max_prompt_tokens (:max_prompt_tokens verification-cfg)})]
-                       (u/log ::verification-start
-                              :index-name (:index_name run)
-                              :run-id (:id run)
-                              :prompt-count (count prompts)
-                              :deterministic-verdict (:deterministic_verdict deterministic-verification))
-                       (combined-llm-result
-                        (mapv (fn [index prompt]
-                                (when (and (pos? index)
-                                           (pos? (or (:inter_prompt_delay_ms verification-cfg)
-                                                     verify/default-inter-prompt-delay-ms)))
-                                  (retry/sleep! sys
-                                                (or (:inter_prompt_delay_ms verification-cfg)
-                                                    verify/default-inter-prompt-delay-ms)))
-                                (u/log ::verification-prompt-start
-                                       :index-name (:index_name run)
-                                       :run-id (:id run)
-                                       :prompt-number (inc index)
-                                       :prompt-count (count prompts))
-                                (verify/complete-with-retries sys verification-cfg prompt))
-                              (range)
-                              prompts))))
+        llm-details (when (llm-verification-enabled? verification-cfg)
+                      (let [prompts (verify/build-prompts
+                                     {:index_name (:index_name run)
+                                      :deterministic_verification deterministic-verification
+                                      :diff run-diff
+                                      :documents (verification-documents source-results run-diff)
+                                      :max_prompt_tokens (:max_prompt_tokens verification-cfg)})]
+                        (u/log ::verification-start
+                               :index-name (:index_name run)
+                               :run-id (:id run)
+                               :prompt-count (count prompts)
+                               :deterministic-verdict (:deterministic_verdict deterministic-verification))
+                        (resolve-llm-verification! sys ds verification-cfg run prompts)))
+        llm-result (:llm-result llm-details)
         _ (if llm-result
             (u/log ::verification-complete
                    :index-name (:index_name run)
@@ -650,7 +669,7 @@
                          "caution"))
         verification (merge
                       {:provider (if llm-result (:provider verification-cfg) "disabled")
-                       :model (if llm-result (verifier-model verification-cfg) "llm-verification-disabled")
+                       :model (if llm-result (verify/verifier-model verification-cfg) "llm-verification-disabled")
                        :deterministic_verdict (:deterministic_verdict deterministic-verification)
                        :deterministic_findings (:deterministic_findings deterministic-verification)
                        :final_verdict final-verdict
@@ -662,8 +681,20 @@
                                        {:llm_verification_enabled false})}
                       (when llm-result
                         {:llm_verdict (:verdict llm-result)
-                         :llm_security_findings (:security_findings llm-result)}))]
+                         :llm_security_findings (:security_findings llm-result)
+                         :verification_input_hash (:verification-input-hash llm-details)
+                         :llm_result_source (:source llm-details)
+                         :attestation_attestor (:attestor llm-details)}))]
     (db/save-verification! ds (:id run) verification)
+    ;; Persist the per-run reference before the reusable row. Pruning can then
+    ;; either see the reference and retain the attestation, or run first and let
+    ;; this write recreate it. This avoids an unreferenced window between the
+    ;; two writes during a concurrent crawl and prune.
+    (when (contains? #{"cache" "provider"} (:source llm-details))
+      (attestation/save-result! ds
+                                verification-cfg
+                                (:verification-input-hash llm-details)
+                                llm-result))
     verification))
 
 (defn- fail-run!
@@ -843,7 +874,8 @@
         (u/log ::history-prune-complete
                :index-names index-names
                :max-age-days max-age-days
-               :pruned-count (:pruned_count result))
+               :pruned-count (:pruned_count result)
+               :pruned-attestation-count (:pruned_attestation_count result))
         (assoc result :max_age_days max-age-days))
       (catch Exception e
         (let [message (or (ex-message e) (str e))]

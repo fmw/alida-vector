@@ -24,6 +24,19 @@ verification:
   # verbosity: low
   prompt_policy_version: "2026-06-08"
   deterministic_gate_version: "2026-06-08"
+  # Verification results are cached by an exact hash of the provider-facing
+  # prompts and semantic verifier settings. Give each environment a stable
+  # attestor name. A later environment can optionally trust attestations from
+  # an earlier environment's migrated Alida metadata database.
+  attestations:
+    attestor: pre-production
+    # trusted_sources:
+    #   - name: pre-production
+    #     type: postgres
+    #     jdbc_url: ${ALIDA_TRUSTED_DATABASE_URL}
+    #     user: ${ALIDA_TRUSTED_DATABASE_USER}
+    #     password: ${ALIDA_TRUSTED_DATABASE_PASSWORD}
+    #     attestors: [pre-production]
   deterministic_thresholds:
     max_removed_absolute: 25
     max_removed_percentage: 0.2

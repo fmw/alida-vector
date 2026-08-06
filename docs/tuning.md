@@ -64,6 +64,9 @@ verification:
   provider: azure-openai
   endpoint: ${AZURE_OPENAI_ENDPOINT}
   deployment_name: reasoning-model
+  # Semantic model identity used for verification attestation hashes. Keep this
+  # stable across environments whose deployment aliases serve the same model.
+  model: gpt-5.1
   api_key: ${AZURE_OPENAI_API_KEY}
   temperature: 1
   max_completion_tokens: 2048

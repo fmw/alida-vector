@@ -175,6 +175,23 @@
    ["s3" S3Source]
    ["gcs" GcsSource]])
 
+(def TrustedAttestationSource
+  [:map {:closed true}
+   [:name :string]
+   [:type [:enum "postgres"]]
+   [:jdbc_url :string]
+   [:user {:optional true} :string]
+   [:username {:optional true} :string]
+   [:password {:optional true} :string]
+   [:max_pool_size {:optional true} :int]
+   [:attestors [:sequential :string]]])
+
+(def VerificationAttestations
+  [:map {:closed true}
+   [:enabled {:optional true} :boolean]
+   [:attestor {:optional true} :string]
+   [:trusted_sources {:optional true} [:sequential TrustedAttestationSource]]])
+
 (def Verification
   [:map
    [:enabled {:optional true} :boolean]
@@ -201,6 +218,7 @@
    [:inter_prompt_delay_ms {:optional true} :int]
    [:prompt_policy_version {:optional true} :string]
    [:deterministic_gate_version {:optional true} :string]
+   [:attestations {:optional true} VerificationAttestations]
    [:deterministic_thresholds {:optional true} DeterministicThresholds]])
 
 (def Notifications

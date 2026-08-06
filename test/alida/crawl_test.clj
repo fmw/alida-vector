@@ -1,8 +1,10 @@
 (ns alida.crawl-test
-  (:require [alida.crawl :as crawl]
+  (:require [alida.attestation :as attestation]
+            [alida.crawl :as crawl]
             [alida.db.postgres :as db]
             [alida.source :as source]
             [alida.source.local]
+            [alida.verify :as verify]
             [clojure.string :as str]
             [clojure.test :refer [deftest is]])
   (:import [java.time Duration Instant]
@@ -451,6 +453,39 @@
                 :message "database unavailable"
                 :max_age_days 30}
                (:pruning result)))))))
+
+(deftest verification-persists-run-reference-before-local-attestation
+  (let [calls (atom [])
+        verification-cfg {:provider "openai"
+                          :model "gpt-test"
+                          :attestations {:attestor "candidate"}}
+        llm-result {:verdict "pass"
+                    :reasoning "Looks good."
+                    :findings []
+                    :security_findings []
+                    :raw_response {:id "response"}}]
+    (with-redefs [verify/build-prompts (constantly ["prompt"])
+                  verify/verification-input-hash (constantly "input-hash")
+                  verify/complete-with-retries (fn [& _] llm-result)
+                  attestation/find-result (constantly nil)
+                  db/save-verification! (fn [_ _ verification]
+                                          (swap! calls conj [:verification verification]))
+                  attestation/save-result! (fn [_ _ input-hash result]
+                                             (swap! calls conj [:attestation input-hash result])
+                                             "candidate")]
+      (#'crawl/verify-run!
+       {:alida/config {:verification verification-cfg}}
+       :datasource
+       {:id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+        :index_name "docs"}
+       {}
+       {:deterministic_verdict "pass"
+        :deterministic_findings []}
+       [])
+      (is (= [:verification :attestation] (mapv first @calls)))
+      (is (= "input-hash" (get-in @calls [0 1 :verification_input_hash])))
+      (is (= "candidate" (get-in @calls [0 1 :attestation_attestor])))
+      (is (= "input-hash" (get-in @calls [1 1]))))))
 
 (deftest verification-documents-forwards-changed-and-added-page-content
   ;; Regression: the in-memory document map has no :source_id (only attached at

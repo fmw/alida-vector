@@ -84,6 +84,51 @@
 (deftest notification-label-loads
   (is (= "staging" (get-in (load-from-map valid-config) [:notifications :label]))))
 
+(deftest verification-attestations-config-loads
+  (let [attestations {:attestor "candidate"
+                      :trusted_sources [{:name "pre-production"
+                                         :type "postgres"
+                                         :jdbc_url "jdbc:postgresql://example.test/attestations"
+                                         :user "reader"
+                                         :password "secret"
+                                         :attestors ["pre-production"]}]}
+        loaded (load-from-map (assoc-in valid-config
+                                        [:verification :attestations]
+                                        attestations))]
+    (is (= attestations (get-in loaded [:verification :attestations])))
+    (is (= (config/structural-config-hash
+            (assoc-in valid-config
+                      [:verification :attestations :trusted_sources]
+                      [(assoc (first (:trusted_sources attestations)) :password "first")]))
+           (config/structural-config-hash
+            (assoc-in valid-config
+                      [:verification :attestations :trusted_sources]
+                      [(assoc (first (:trusted_sources attestations)) :password "second")]))))))
+
+(deftest verification-attestations-config-is-validated
+  (doseq [[attestations message]
+          [[{:attestor " "} #"attestor must not be blank"]
+           [{:trusted_sources [{:name "source"
+                                :type "postgres"
+                                :jdbc_url "jdbc:postgresql://example.test/attestations"
+                                :attestors []}]}
+            #"requires at least one attestor"]
+           [{:trusted_sources [{:name "source"
+                                :type "postgres"
+                                :jdbc_url "jdbc:postgresql://example.test/one"
+                                :attestors ["one"]}
+                               {:name "source"
+                                :type "postgres"
+                                :jdbc_url "jdbc:postgresql://example.test/two"
+                                :attestors ["two"]}]}
+            #"source names must be unique"]]]
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         message
+         (load-from-map (assoc-in valid-config
+                                  [:verification :attestations]
+                                  attestations))))))
+
 (deftest retention-config-loads-and-validates
   (is (= 30
          (get-in (load-from-map (assoc valid-config
@@ -336,6 +381,7 @@ indexes:
 verification:
   provider: azure-openai
   deployment_name: gpt-5.1
+  model: gpt-5.1
   api_key: test-key
 indexes:
   - name: docs
@@ -358,6 +404,17 @@ indexes:
                             (config/load-config (.getPath file))))
       (finally
         (.delete file)))))
+
+(deftest azure-openai-verification-model-is-required
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo
+       #"provider azure-openai requires model"
+       (load-from-map
+        (assoc valid-config
+               :verification {:provider "azure-openai"
+                              :endpoint "https://example.openai.azure.com"
+                              :deployment_name "verifier"
+                              :api_key "test-key"})))))
 
 (deftest vertex-ai-verification-project-is-required
   (let [file (java.io.File/createTempFile "alida-vertex-ai-verification-provider" ".yml")]

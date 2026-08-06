@@ -203,16 +203,16 @@
           partition))
 
 (defn- format-prune-result
-  [{:keys [pruned]}]
-  (if (seq pruned)
-    (str/join
-     \newline
-     (cons (format "Pruned %s runs." (count pruned))
-           (map format-pruned-run pruned)))
-    "Pruned 0 runs."))
+  [{:keys [pruned pruned_attestation_count]}]
+  (str/join
+   \newline
+   (concat [(format "Pruned %s runs." (count pruned))
+            (format "Pruned %s verification attestations."
+                    (or pruned_attestation_count 0))]
+           (map format-pruned-run pruned))))
 
 (defn- format-automatic-pruning
-  [{:keys [failed message pruned_count skipped max_age_days]}]
+  [{:keys [failed message pruned_count pruned_attestation_count skipped max_age_days]}]
   (cond
     failed
     (format "History pruning failed after successful crawls: %s" message)
@@ -221,9 +221,10 @@
     "History pruning skipped because one or more indexes failed."
 
     :else
-    (format "History pruning removed %s runs older than %s days."
+    (format "History pruning removed %s runs older than %s days and %s unreferenced verification attestations."
             pruned_count
-            max_age_days)))
+            max_age_days
+            (or pruned_attestation_count 0))))
 
 (defn- format-crawl-result
   [{:keys [succeeded failed pruning]}]

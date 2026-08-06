@@ -146,7 +146,8 @@
                                       'alida_chunks_1536',
                                       'alida_chunks_3072',
                                       'alida_live_chunks_1536',
-                                      'alida_live_chunks_3072')
+                                      'alida_live_chunks_3072',
+                                      'alida_verification_attestations')
                                     ORDER BY relname"]
                                   db/jdbc-opts)
                       :reuse-index (:indexname
@@ -162,9 +163,98 @@
         (is (= [{:relname "alida_chunks_1536" :relkind "p"}
                 {:relname "alida_chunks_3072" :relkind "p"}
                 {:relname "alida_live_chunks_1536" :relkind "v"}
-                {:relname "alida_live_chunks_3072" :relkind "v"}]
+                {:relname "alida_live_chunks_3072" :relkind "v"}
+                {:relname "alida_verification_attestations" :relkind "r"}]
                (:relations result)))
         (is (= "alida_runs_embedding_reuse_idx" (:reuse-index result)))))))
+
+(deftest ^:integration verification-attestations-round-trip-with-trust-order
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (db/save-verification-attestation!
+                    ds
+                    {:verification_input_hash "input-hash"
+                     :attestor "candidate"
+                     :provider "openai"
+                     :model "gpt-test"
+                     :prompt_policy_version "policy-1"
+                     :deterministic_gate_version "gate-1"
+                     :verification_input_version "2"
+                     :llm_verdict "caution"
+                     :reasoning "Candidate needs review"
+                     :llm_findings [{:type "possible-issue"}]
+                     :llm_security_findings []
+                     :raw_response {:verdict "caution"}})
+                   (db/save-verification-attestation!
+                    ds
+                    {:verification_input_hash "input-hash"
+                     :attestor "pre-production"
+                     :provider "openai"
+                     :model "gpt-test"
+                     :prompt_policy_version "policy-1"
+                     :deterministic_gate_version "gate-1"
+                     :verification_input_version "2"
+                     :llm_verdict "pass"
+                     :reasoning "Pre-production passed"
+                     :llm_findings []
+                     :llm_security_findings []
+                     :raw_response {:verdict "pass"}})
+                   {:preferred (db/find-verification-attestation
+                                ds
+                                "input-hash"
+                                ["pre-production" "candidate"])
+                    :candidate (db/find-verification-attestation
+                                ds
+                                "input-hash"
+                                ["candidate"])}))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (do
+        (is (= "pre-production" (get-in result [:preferred :attestor])))
+        (is (= "pass" (get-in result [:preferred :llm_verdict])))
+        (is (= {:verdict "pass"} (get-in result [:preferred :raw_response])))
+        (is (= "candidate" (get-in result [:candidate :attestor])))
+        (is (= [{:type "possible-issue"}]
+               (get-in result [:candidate :llm_findings])))))))
+
+(deftest ^:integration verification-attestation-upsert-preserves-created-at
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (let [record {:verification_input_hash "stable-input-hash"
+                                 :attestor "candidate"
+                                 :provider "openai"
+                                 :model "gpt-test"
+                                 :verification_input_version "2"
+                                 :llm_verdict "pass"
+                                 :reasoning "Verified"
+                                 :raw_response {:verdict "pass"}}]
+                     (db/save-verification-attestation! ds record)
+                     (jdbc/execute! ds
+                                    ["UPDATE alida_verification_attestations
+                                      SET created_at = TIMESTAMPTZ '2000-01-01 00:00:00+00',
+                                          last_used_at = TIMESTAMPTZ '2000-01-01 00:00:00+00'
+                                      WHERE verification_input_hash = ? AND attestor = ?"
+                                     (:verification_input_hash record)
+                                     (:attestor record)])
+                     (db/save-verification-attestation! ds record)
+                     (jdbc/execute-one!
+                      ds
+                      ["SELECT created_at = TIMESTAMPTZ '2000-01-01 00:00:00+00'
+                                AS created_at_preserved,
+                               last_used_at > TIMESTAMPTZ '2000-01-01 00:00:00+00'
+                                AS last_used_at_advanced
+                        FROM alida_verification_attestations
+                        WHERE verification_input_hash = ? AND attestor = ?"
+                       (:verification_input_hash record)
+                       (:attestor record)]
+                      db/jdbc-opts))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (do
+        (is (true? (:created_at_preserved result)))
+        (is (true? (:last_used_at_advanced result)))))))
 
 (deftest ^:integration lifecycle-and-live-view-round-trip
   (let [result (with-temp-database
@@ -356,6 +446,112 @@
         (is (= "caution" (get-in result [:verification :final_verdict])))
         (is (= "LLM verification was disabled by config."
                (get-in result [:verification :reasoning])))))))
+
+(deftest ^:integration repeated-verification-inputs-reuse-the-local-attestation
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (let [file (temp-file ".html"
+                                         "<html lang=\"en\"><head><title>Support</title></head>
+                                          <body><h1>Support</h1><p>This page explains how support works.</p></body></html>")
+                         test-index (assoc index-cfg
+                                           :auto_activate true
+                                           :sources [{:id "fixtures"
+                                                      :type "local"
+                                                      :path (.getPath file)}])
+                         sys (assoc-in (test-system test-index)
+                                       [:alida/config :verification :attestations :attestor]
+                                       "candidate")
+                         provider-calls (atom 0)]
+                     (with-redefs [embed/embed-batch (fn [_ _ texts]
+                                                       (mapv (fn [_] (zero-vector 1536)) texts))
+                                   verify/complete (fn [& args]
+                                                     (swap! provider-calls inc)
+                                                     (apply passing-verification args))]
+                       (let [first-summary (crawl/crawl-index! sys ds test-index)
+                             _ (db/activate-run! ds (:run_id first-summary))
+                             second-summary (crawl/crawl-index! sys ds test-index)
+                             third-summary (crawl/crawl-index! sys ds test-index)
+                             second-verification (db/get-verification ds (:run_id second-summary))
+                             third-verification (db/get-verification ds (:run_id third-summary))]
+                         {:provider-calls @provider-calls
+                          :second-verification second-verification
+                          :third-verification third-verification
+                          :attestation-count
+                          (:n (jdbc/execute-one!
+                               ds
+                               ["SELECT count(*) AS n FROM alida_verification_attestations"]
+                               db/jdbc-opts))})))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (do
+        (is (= 2 (:provider-calls result))
+            "the first-run and first empty-diff inputs are unique; the next empty diff is reused")
+        (is (= "provider" (get-in result [:second-verification :llm_result_source])))
+        (is (= "cache" (get-in result [:third-verification :llm_result_source])))
+        (is (= "candidate" (get-in result [:third-verification :attestation_attestor])))
+        (is (= (get-in result [:second-verification :verification_input_hash])
+               (get-in result [:third-verification :verification_input_hash])))
+        (is (= 64 (count (get-in result [:third-verification :verification_input_hash]))))
+        (is (= 2 (:attestation-count result)))))))
+
+(deftest ^:integration trusted-database-attestation-skips-a-duplicate-provider-call
+  (let [result
+        (with-temp-database
+          (fn [trusted-db-config trusted-ds]
+            (db/migrate! {:database trusted-db-config})
+            (let [file (temp-file ".html"
+                                  "<html lang=\"en\"><head><title>Support</title></head>
+                                   <body><h1>Support</h1><p>This page explains how support works.</p></body></html>")
+                  test-index (assoc index-cfg
+                                    :sources [{:id "fixtures"
+                                               :type "local"
+                                               :path (.getPath file)}])
+                  trusted-sys (assoc-in (test-system test-index)
+                                        [:alida/config :verification :attestations :attestor]
+                                        "pre-production")]
+              (with-redefs [embed/embed-batch (fn [_ _ texts]
+                                                (mapv (fn [_] (zero-vector 1536)) texts))
+                            verify/complete passing-verification]
+                (let [trusted-summary (crawl/crawl-index! trusted-sys trusted-ds test-index)]
+                  (with-temp-database
+                    (fn [candidate-db-config candidate-ds]
+                      (db/migrate! {:database candidate-db-config})
+                      (let [trusted-source (merge trusted-db-config
+                                                  {:name "pre-production"
+                                                   :type "postgres"
+                                                   :attestors ["pre-production"]})
+                            candidate-sys (assoc-in
+                                           (test-system test-index)
+                                           [:alida/config :verification :attestations]
+                                           {:attestor "candidate"
+                                            :trusted_sources [trusted-source]})]
+                        (with-redefs [verify/complete
+                                      (fn [& _]
+                                        (throw (ex-info "trusted input should skip the provider" {})))]
+                          (let [candidate-summary (crawl/crawl-index! candidate-sys
+                                                                      candidate-ds
+                                                                      test-index)
+                                verification (db/get-verification
+                                              candidate-ds
+                                              (:run_id candidate-summary))]
+                            {:trusted-hash (:verification_input_hash
+                                           (db/get-verification trusted-ds
+                                                                (:run_id trusted-summary)))
+                             :candidate-hash (:verification_input_hash verification)
+                             :source (:llm_result_source verification)
+                             :attestor (:attestation_attestor verification)
+                             :verdict (:llm_verdict verification)}))))))))))]
+    (if (or (= :skipped result)
+            ;; The nested helper returns :skipped when the integration database
+            ;; is not configured.
+            (= :skipped (some-> result :result)))
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (do
+        (is (= (:trusted-hash result) (:candidate-hash result)))
+        (is (= "trusted:pre-production" (:source result)))
+        (is (= "pre-production" (:attestor result)))
+        (is (= "pass" (:verdict result)))))))
 
 (deftest ^:integration crawl-index-reuses-unchanged-chunk-embeddings
   (let [result (with-temp-database
@@ -636,6 +832,68 @@
         (is (nil? (:prunable-report result)))
         (is (= 1 (:events result)))))))
 
+(deftest ^:integration prune-removes-only-attestations-referenced-by-pruned-runs
+  (let [result (with-temp-database
+                 (fn [db-config ds]
+                   (db/migrate! {:database db-config})
+                   (let [prunable (db/create-run! ds index-cfg "hash-1")
+                         retained (db/create-run! ds index-cfg "hash-1")]
+                     (doseq [[run input-hash] [[prunable "prunable-input"]
+                                               [retained "retained-input"]]]
+                       (db/save-verification!
+                        ds
+                        (:id run)
+                        {:provider "openai"
+                         :model "gpt-test"
+                         :deterministic_verdict "pass"
+                         :llm_verdict "pass"
+                         :final_verdict "pass"
+                         :verification_input_hash input-hash
+                         :llm_result_source "provider"
+                         :attestation_attestor "candidate"})
+                       (db/save-verification-attestation!
+                        ds
+                        {:verification_input_hash input-hash
+                         :attestor "candidate"
+                         :provider "openai"
+                         :model "gpt-test"
+                         :verification_input_version "2"
+                         :llm_verdict "pass"}))
+                     (db/save-verification-attestation!
+                      ds
+                      {:verification_input_hash "unrelated-orphan"
+                       :attestor "candidate"
+                       :provider "openai"
+                       :model "gpt-test"
+                       :verification_input_version "2"
+                       :llm_verdict "pass"})
+                     (db/update-run-status! ds (:id prunable) "error")
+                     (db/update-run-status! ds (:id retained) "error")
+                     (jdbc/execute! ds
+                                    ["UPDATE alida_runs
+                                      SET started_at = now() - interval '90 days'
+                                      WHERE id = ?"
+                                     (:id prunable)])
+                     (let [pruned (db/prune-runs! ds
+                                                   {:older-than (.minus (java.time.Instant/now)
+                                                                       (java.time.Duration/ofDays 30))
+                                                   :index-names [(:name index-cfg)]})]
+                       {:pruned pruned
+                        :attestations (jdbc/execute!
+                                       ds
+                                       ["SELECT verification_input_hash
+                                         FROM alida_verification_attestations
+                                         ORDER BY verification_input_hash"]
+                                       db/jdbc-opts)}))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (do
+        (is (= 1 (get-in result [:pruned :pruned_count])))
+        (is (= 1 (get-in result [:pruned :pruned_attestation_count])))
+        (is (= [{:verification_input_hash "retained-input"}
+                {:verification_input_hash "unrelated-orphan"}]
+               (:attestations result)))))))
+
 (deftest ^:integration prune-disabled-embeddings-removes-terminal-disabled-runs
   (let [result (with-temp-database
                  (fn [db-config ds]
@@ -775,6 +1033,7 @@
   (let [result (with-temp-database
                  (fn [db-config _ds]
                    (db/migrate! {:database db-config})
+                   (db/rollback-migration! {:database db-config})
                    (db/rollback-migration! {:database db-config})
                    (with-open [ds (db/datasource db-config)]
                      (jdbc/execute!

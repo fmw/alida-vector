@@ -36,6 +36,24 @@
     (.setType "jsonb")
     (.setValue (if (string? value) value (json/write-str value)))))
 
+(defn- jsonb-value
+  [value]
+  (cond
+    (instance? PGobject value)
+    (json/read-str (.getValue ^PGobject value) :key-fn keyword)
+
+    (string? value)
+    (json/read-str value :key-fn keyword)
+
+    :else value))
+
+(defn- decode-attestation
+  [row]
+  (some-> row
+          (update :llm_findings jsonb-value)
+          (update :llm_security_findings jsonb-value)
+          (update :raw_response jsonb-value)))
+
 (defn- require-lifecycle-status!
   [status]
   (when-not (contains? lifecycle-statuses status)
@@ -91,13 +109,15 @@
 (def default-max-pool-size 10)
 
 (defn datasource
-  [{:keys [jdbc_url user username password max_pool_size]}]
+  [{:keys [jdbc_url user username password max_pool_size read_only]}]
   (let [cfg (HikariConfig.)]
     (.setJdbcUrl cfg jdbc_url)
     (when (or username user)
       (.setUsername cfg (or username user)))
     (when password
       (.setPassword cfg password))
+    (when read_only
+      (.setReadOnly cfg true))
     ;; Must comfortably exceed per-run concurrency: a crawl holds one connection
     ;; for its advisory lock plus a transaction connection plus reuse/diff queries,
     ;; and concurrent index crawls multiply that.
@@ -318,7 +338,8 @@
 
 (defn save-verification!
   [connectable value {:keys [provider model deterministic_verdict deterministic_findings llm_verdict
-                             final_verdict reasoning llm_security_findings raw_response]}]
+                             final_verdict reasoning llm_security_findings raw_response
+                             verification_input_hash llm_result_source attestation_attestor]}]
   (require-verdict! deterministic_verdict)
   (when llm_verdict
     (require-verdict! llm_verdict))
@@ -326,10 +347,11 @@
     (require-verdict! final_verdict))
   (jdbc/execute-one!
    connectable
-   ["INSERT INTO alida_verifications
+    ["INSERT INTO alida_verifications
        (run_id, provider, model, deterministic_verdict, deterministic_findings, llm_verdict,
-        final_verdict, reasoning, llm_security_findings, raw_response)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        final_verdict, reasoning, llm_security_findings, raw_response, verification_input_hash,
+        llm_result_source, attestation_attestor)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
      ON CONFLICT (run_id) DO UPDATE
      SET provider = EXCLUDED.provider,
          model = EXCLUDED.model,
@@ -340,6 +362,9 @@
          reasoning = EXCLUDED.reasoning,
          llm_security_findings = EXCLUDED.llm_security_findings,
          raw_response = EXCLUDED.raw_response,
+         verification_input_hash = EXCLUDED.verification_input_hash,
+         llm_result_source = EXCLUDED.llm_result_source,
+         attestation_attestor = EXCLUDED.attestation_attestor,
          created_at = now()
      RETURNING *"
     (run-id value)
@@ -351,7 +376,10 @@
     final_verdict
     reasoning
     (jsonb (or llm_security_findings []))
-    (jsonb (or raw_response {}))]
+    (jsonb (or raw_response {}))
+    verification_input_hash
+    llm_result_source
+    attestation_attestor]
    jdbc-opts))
 
 (defn get-verification
@@ -360,6 +388,101 @@
    connectable
    ["SELECT * FROM alida_verifications WHERE run_id = ?" (run-id value)]
    jdbc-opts))
+
+(defn find-verification-attestation
+  [connectable verification-input-hash attestors]
+  (when (seq attestors)
+    (with-connection
+      connectable
+      (fn [conn]
+        (let [attestors-array (text-array conn attestors)]
+          (decode-attestation
+           (jdbc/execute-one!
+            conn
+            ["SELECT *
+              FROM alida_verification_attestations
+              WHERE verification_input_hash = ?
+                AND attestor = ANY(?)
+              ORDER BY array_position(?, attestor), created_at DESC
+              LIMIT 1"
+             verification-input-hash
+             attestors-array
+             attestors-array]
+            jdbc-opts)))))))
+
+(defn save-verification-attestation!
+  [connectable {:keys [verification_input_hash attestor provider model prompt_policy_version
+                       deterministic_gate_version verification_input_version llm_verdict reasoning
+                       llm_findings llm_security_findings raw_response]}]
+  (require-verdict! llm_verdict)
+  (jdbc/execute-one!
+   connectable
+   ["INSERT INTO alida_verification_attestations
+       (verification_input_hash, attestor, provider, model, prompt_policy_version,
+        deterministic_gate_version, verification_input_version, llm_verdict, reasoning,
+        llm_findings, llm_security_findings, raw_response)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+     ON CONFLICT (verification_input_hash, attestor) DO UPDATE
+     SET provider = EXCLUDED.provider,
+         model = EXCLUDED.model,
+         prompt_policy_version = EXCLUDED.prompt_policy_version,
+         deterministic_gate_version = EXCLUDED.deterministic_gate_version,
+         verification_input_version = EXCLUDED.verification_input_version,
+         llm_verdict = EXCLUDED.llm_verdict,
+         reasoning = EXCLUDED.reasoning,
+         llm_findings = EXCLUDED.llm_findings,
+         llm_security_findings = EXCLUDED.llm_security_findings,
+         raw_response = EXCLUDED.raw_response,
+         last_used_at = now()
+     RETURNING *"
+    verification_input_hash
+    attestor
+    provider
+    model
+    (or prompt_policy_version "")
+    (or deterministic_gate_version "")
+    verification_input_version
+    llm_verdict
+    reasoning
+    (jsonb (or llm_findings []))
+    (jsonb (or llm_security_findings []))
+    (jsonb (or raw_response {}))]
+   jdbc-opts))
+
+(defn prune-unreferenced-verification-attestations!
+  [connectable references]
+  (if (seq references)
+    (with-connection
+      connectable
+      (fn [conn]
+        (let [input-hashes (text-array conn (mapv :verification_input_hash references))
+              attestors (text-array conn (mapv :attestation_attestor references))]
+          (:pruned_count
+           (jdbc/execute-one!
+            conn
+            ["WITH candidates AS (
+                SELECT *
+                FROM unnest(?::text[], ?::text[])
+                  AS candidate(verification_input_hash, attestor)
+              ),
+              deleted AS (
+                DELETE FROM alida_verification_attestations AS attestation
+                USING candidates AS candidate
+                WHERE attestation.verification_input_hash = candidate.verification_input_hash
+                  AND attestation.attestor = candidate.attestor
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM alida_verifications AS verification
+                    WHERE verification.verification_input_hash = attestation.verification_input_hash
+                      AND verification.attestation_attestor = attestation.attestor
+                  )
+                RETURNING 1
+              )
+              SELECT count(*) AS pruned_count FROM deleted"
+             input-hashes
+             attestors]
+            jdbc-opts)))))
+    0))
 
 (defn- vector-literal
   [embedding]
@@ -694,7 +817,16 @@
 
 (defn- prune-run!
   [tx opts run]
-  (let [partition-name (droppable-run-partition!
+  (let [attestation-reference (jdbc/execute-one!
+                               tx
+                               ["SELECT verification_input_hash, attestation_attestor
+                                 FROM alida_verifications
+                                 WHERE run_id = ?
+                                   AND verification_input_hash IS NOT NULL
+                                   AND attestation_attestor IS NOT NULL"
+                                (:id run)]
+                               jdbc-opts)
+        partition-name (droppable-run-partition!
                         tx
                         (:embedding_dimensions run)
                         (:id run))]
@@ -712,7 +844,29 @@
                                                          :older-than
                                                          :disabled-embeddings
                                                          :index-names])}})
-    (assoc run :partition partition-name)))
+    (cond-> (assoc run :partition partition-name)
+      attestation-reference
+      (assoc ::attestation-reference attestation-reference))))
+
+(defn- prune-index-runs!
+  [connectable opts index-name]
+  (with-index-lock!
+    connectable
+    index-name
+    #(jdbc/with-transaction [tx connectable]
+       (let [pruned-with-references (->> (prune-candidate-runs tx opts)
+                                         (filter (comp #{index-name} :index_name))
+                                         (mapv (partial prune-run! tx opts)))
+             references (->> pruned-with-references
+                             (keep ::attestation-reference)
+                             distinct
+                             vec)
+             pruned-attestation-count
+             (prune-unreferenced-verification-attestations! tx references)]
+         {:pruned (mapv (fn [run]
+                          (dissoc run ::attestation-reference))
+                        pruned-with-references)
+          :pruned_attestation_count pruned-attestation-count}))))
 
 (defn prune-runs!
   [connectable opts]
@@ -722,18 +876,15 @@
                          distinct
                          sort
                          vec)
-        pruned (mapcat
-                (fn [index-name]
-                  (with-index-lock!
-                    connectable
-                    index-name
-                    #(jdbc/with-transaction [tx connectable]
-                       (->> (prune-candidate-runs tx opts)
-                            (filter (comp #{index-name} :index_name))
-                            (mapv (partial prune-run! tx opts))))))
-                index-names)]
+        index-results (mapv (partial prune-index-runs! connectable opts) index-names)
+        pruned (into [] (mapcat :pruned) index-results)
+        pruned-attestation-count (transduce (map :pruned_attestation_count)
+                                             +
+                                             0
+                                             index-results)]
     {:pruned pruned
-     :pruned_count (count pruned)}))
+     :pruned_count (count pruned)
+     :pruned_attestation_count pruned-attestation-count}))
 
 (defn search-live-chunks
   [connectable embedding-dimensions query-embedding {:keys [index_names limit]}]

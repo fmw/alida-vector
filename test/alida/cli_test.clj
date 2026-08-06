@@ -193,7 +193,8 @@
                                      {:pruned [{:id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
                                                 :index_name "docs"
                                                 :lifecycle_status "error"
-                                                :partition "alida_chunks_1536_run_018c9099041d7f5b9b655b8f08f8e61d"}]})]
+                                                :partition "alida_chunks_1536_run_018c9099041d7f5b9b655b8f08f8e61d"}]
+                                      :pruned_attestation_count 1})]
         (let [result (cli/run ["prune"
                                "--config" "ignored.yml"
                                "--index" "docs"
@@ -201,6 +202,7 @@
                                "--older-than" "30d"])]
           (is (= 0 (:exit-code result)))
           (is (str/includes? (:message result) "Pruned 1 runs."))
+          (is (str/includes? (:message result) "Pruned 1 verification attestations."))
           (is (str/includes? (:message result) "018c9099-041d-7f5b-9b65-5b8f08f8e61d")))))))
 
 (deftest prune-disabled-embeddings-command-calls-db-layer
@@ -213,10 +215,12 @@
                                      (is (nil? (:keep-last opts)))
                                      (is (nil? (:older-than opts)))
                                      (is (true? (:disabled-embeddings opts)))
-                                     {:pruned []})]
+                                     {:pruned []
+                                      :pruned_attestation_count 0})]
         (let [result (cli/run ["prune" "--config" "ignored.yml" "--disabled-embeddings"])]
           (is (= 0 (:exit-code result)))
-          (is (= "Pruned 0 runs." (:message result))))))))
+          (is (= "Pruned 0 runs.\nPruned 0 verification attestations."
+                 (:message result))))))))
 
 (deftest migrate-command-calls-db-layer
   (with-system-stub
@@ -246,6 +250,7 @@
                                                  :notification {:sent true}}]
                                     :failed []
                                     :pruning {:pruned_count 2
+                                              :pruned_attestation_count 3
                                               :max_age_days 30}})]
         (let [result (cli/run ["crawl" "--config" "ignored.yml" "--index" "docs"])]
           (is (= 0 (:exit-code result)))
@@ -255,7 +260,8 @@
           (is (str/includes? (:message result) "verdict=-"))
           (is (str/includes? (:message result) "notification=sent"))
           (is (str/includes? (:message result)
-                             "History pruning removed 2 runs older than 30 days.")))))))
+                             (str "History pruning removed 2 runs older than 30 days "
+                                  "and 3 unreferenced verification attestations."))))))))
 
 (deftest crawl-command-exits-nonzero-when-any-index-fails
   (with-system-stub
