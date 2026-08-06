@@ -192,3 +192,15 @@
                                          {"pass" 2 "caution" 1 "fail" 0}}}})))]
     (is (str/includes? full-report "LLM Verification\nverdict: caution\nbatches: 3"))
     (is (= 1 (count (re-seq #"Review an unexpected redirect" full-report))))))
+
+(deftest full-report-omits-batch-count-for-the-common-single-batch-case
+  (let [full-report (:full_report
+                     (report/build
+                      (assoc summary
+                             :verification_verdict "pass"
+                             :verification
+                             {:llm_verdict "pass"
+                              :reasoning "No concerns."
+                              :raw_response {:summary {:batch_count 1}}})))]
+    (is (str/includes? full-report "LLM Verification\nverdict: pass\nreasoning: No concerns."))
+    (is (not (str/includes? full-report "batches: 1")))))

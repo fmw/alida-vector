@@ -45,7 +45,7 @@
                            (verify/chat-completion-parameters provider-cfg)
                            {:response_format {:type "json_object"}
                             :messages [{:role "system"
-                                        :content verify/system-prompt}
+                                        :content (verify/completion-system-prompt provider-cfg)}
                                        {:role "user"
                                         :content prompt}]}))})]
     (verify/parse-structured-verdict (response-content response))))

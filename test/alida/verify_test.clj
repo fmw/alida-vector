@@ -458,14 +458,16 @@
         combined (verify/combine-batch-results results)]
     (is (= "pass" (:verdict combined)))
     (is (= "All 2 verification batches passed." (:reasoning combined)))
-    (is (= [{:type "informational"}] (:findings combined)))
+    (is (= [{:type "informational"}
+            {:type "informational"}]
+           (:findings combined)))
     (is (= {:batch_count 2
             :verdict_counts {"pass" 2 "caution" 0 "fail" 0}}
            (get-in combined [:raw_response :summary])))
     (is (= (mapv :raw_response results)
            (get-in combined [:raw_response :batches])))))
 
-(deftest combine-mixed-batches-keeps-only-distinct-review-reasons
+(deftest combine-mixed-batches-groups-reasons-without-collapsing-findings
   (let [duplicate-finding {:type "suspicious-link"}
         results [{:verdict "pass"
                   :reasoning "No concerns."
@@ -496,30 +498,117 @@
                 "\n- Batch 5 (fail): A credential is exposed.")
            (:reasoning combined)))
     (is (not (str/includes? (:reasoning combined) "No concerns")))
-    (is (= [duplicate-finding] (:security_findings combined)))))
+    (is (= [duplicate-finding duplicate-finding]
+           (:security_findings combined)))))
 
-(deftest normalize-cached-batch-results-without-losing-raw-evidence
+(deftest normalize-cached-batch-results-only-updates-presentation-fields
   (let [raw-batches [{:verdict "pass" :reasoning "First batch passed."}
                      {:verdict "caution" :reasoning "Review this batch."}]
+        curated-finding {:type "curated-finding"}
+        curated-security-finding {:type "curated-security-finding"}
         normalized (verify/normalize-batched-result
-                    {:verdict "caution"
+                    {:verdict "fail"
                      :reasoning "First batch passed.\n\nReview this batch."
-                     :findings []
-                     :security_findings []
+                     :findings [curated-finding]
+                     :security_findings [curated-security-finding]
                      :raw_response {:provider_request_id "request-1"
                                     :batches raw-batches}})]
     (is (= (str "2 verification batches reviewed: 1 passed; 1 flagged for review."
                 "\n\nReview reason:"
                 "\n- Batch 2 (caution): Review this batch.")
            (:reasoning normalized)))
+    (is (= "fail" (:verdict normalized)))
+    (is (= [curated-finding] (:findings normalized)))
+    (is (= [curated-security-finding] (:security_findings normalized)))
     (is (= "request-1"
            (get-in normalized [:raw_response :provider_request_id])))
     (is (= raw-batches (get-in normalized [:raw_response :batches])))))
+
+(deftest normalize-cached-batch-results-tolerates-malformed-raw-batches
+  (let [cached {:verdict "pass"
+                :reasoning "Attested pass."
+                :findings [{:type "curated"}]
+                :security_findings []
+                :raw_response {:batches [{:reasoning "Missing verdict."}]}}]
+    (is (= cached (verify/normalize-batched-result cached)))))
+
+(deftest normalize-current-batch-results-preserves-synthesized-reasoning
+  (let [current {:verdict "caution"
+                 :reasoning "Concise synthesized reasoning."
+                 :findings []
+                 :security_findings []
+                 :raw_response {:summary {:batch_count 2}
+                                :batches [{:reasoning "Malformed but already normalized."}]}}]
+    (is (= current (verify/normalize-batched-result current)))))
+
+(deftest prose-synthesis-is-limited-to-multiple-distinct-review-reasons
+  (is (false? (verify/prose-synthesis-needed?
+               [{:verdict "pass" :reasoning "Fine."}
+                {:verdict "caution" :reasoning "Review links."}])))
+  (is (false? (verify/prose-synthesis-needed?
+               [{:verdict "caution" :reasoning "Review links."}
+                {:verdict "caution" :reasoning " Review links. "}])))
+  (is (true? (verify/prose-synthesis-needed?
+              [{:verdict "caution" :reasoning "Review links."}
+               {:verdict "fail" :reasoning "A credential is exposed."}]))))
+
+(deftest prose-summary-prompt-contains-only-review-batches
+  (let [prompt (verify/build-prose-summary-prompt
+                [{:verdict "pass" :reasoning "No concerns."}
+                 {:verdict "caution"
+                  :reasoning "Review the redirect."
+                  :findings [{:url "https://example.test/redirect"}]}])
+        input (json/read-str (last (str/split prompt #"\n\n")) :key-fn keyword)]
+    (is (= "caution" (:authoritative_verdict input)))
+    (is (= [{:batch_number 2
+             :verdict "caution"
+             :reasoning "Review the redirect."
+             :findings [{:url "https://example.test/redirect"}]
+             :security_findings []}]
+           (:review_batches input)))
+    (is (str/includes? prompt "Do not include the verdict tally"))))
+
+(deftest prose-summary-cannot-change-authoritative-result-data
+  (let [results [{:verdict "caution"
+                  :reasoning "Review redirect A."
+                  :findings [{:url "https://example.test/a"}]
+                  :raw_response {:verdict "caution" :reasoning "Review redirect A."}}
+                 {:verdict "caution"
+                  :reasoning "Redirect B looks unexpected."
+                  :security_findings [{:url "https://example.test/b"}]
+                  :raw_response {:verdict "caution"
+                                 :reasoning "Redirect B looks unexpected."}}]
+        combined (verify/combine-batch-results results)
+        synthesis {:verdict "caution"
+                   :reasoning "Two unexpected redirects require review."
+                   :findings []
+                   :security_findings []
+                   :raw_response {:verdict "caution"
+                                  :reasoning "Two unexpected redirects require review."}}
+        summarized (verify/apply-prose-summary combined results synthesis)]
+    (is (= (str "2 verification batches reviewed: 2 flagged for review."
+                "\n\nReview summary:\nTwo unexpected redirects require review.")
+           (:reasoning summarized)))
+    (is (= (:verdict combined) (:verdict summarized)))
+    (is (= (:findings combined) (:findings summarized)))
+    (is (= (:security_findings combined) (:security_findings summarized)))
+    (is (= (:raw_response synthesis)
+           (get-in summarized [:raw_response :prose_summary])))
+    (is (= combined
+           (verify/apply-prose-summary combined
+                                       results
+                                       (assoc synthesis :verdict "fail"))))))
 
 (deftest combine-batch-results-requires-at-least-one-result
   (is (thrown-with-msg? clojure.lang.ExceptionInfo
                         #"empty set"
                         (verify/combine-batch-results []))))
+
+(deftest combine-batch-results-rejects-invalid-verdicts
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"Invalid verification verdict"
+                        (verify/combine-batch-results
+                         [{:verdict nil :reasoning "Missing verdict."}]))))
 
 (deftest azure-openai-verification-retries-retryable-errors
   (let [responses (atom [{:status 429
@@ -598,7 +687,32 @@
       (is (= "gpt-4.1-mini" (:model body)))
       (is (= 0 (:temperature body)))
       (is (= {:type "json_object"} (:response_format body)))
-      (is (= ["system" "user"] (mapv :role (:messages body)))))))
+      (is (= ["system" "user"] (mapv :role (:messages body))))
+      (is (= verify/system-prompt (get-in body [:messages 0 :content]))))))
+
+(deftest openai-complete-supports-a-presentation-system-prompt
+  (let [requests (atom [])
+        sys {:alida/http-request
+             (fn [request]
+               (swap! requests conj request)
+               {:status 200
+                :body (json/write-str
+                       {:choices [{:message {:content (json/write-str
+                                                       {:verdict "caution"
+                                                        :reasoning "Concise summary."
+                                                        :findings []
+                                                        :security_findings []})}}]})})}]
+    (verify/complete-with-retries
+     sys
+     {:provider "openai"
+      :api_key "test-key"
+      :model "gpt-4.1-mini"}
+     verify/prose-summary-system-prompt
+     "summarize this")
+    (let [body (json/read-str (:body (first @requests)) :key-fn keyword)]
+      (is (= verify/prose-summary-system-prompt
+             (get-in body [:messages 0 :content])))
+      (is (= "summarize this" (get-in body [:messages 1 :content]))))))
 
 (deftest openai-complete-forwards-chat-completion-parameters
   (let [requests (atom [])

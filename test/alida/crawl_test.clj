@@ -487,6 +487,117 @@
       (is (= "candidate" (get-in @calls [0 1 :attestation_attestor])))
       (is (= "input-hash" (get-in @calls [1 1]))))))
 
+(deftest verification-synthesizes-multiple-distinct-review-reasons
+  (let [calls (atom [])
+        sleeps (atom [])
+        batch-results
+        (atom [{:verdict "pass"
+                :reasoning "No concerns."
+                :raw_response {:verdict "pass" :reasoning "No concerns."}}
+               {:verdict "caution"
+                :reasoning "Review the unexpected redirect."
+                :findings [{:url "https://example.test/a"}]
+                :raw_response {:verdict "caution"
+                               :reasoning "Review the unexpected redirect."
+                               :findings [{:url "https://example.test/a"}]}}
+               {:verdict "caution"
+                :reasoning "An outdated destination appears in another page."
+                :security_findings [{:url "https://example.test/b"}]
+                :raw_response {:verdict "caution"
+                               :reasoning "An outdated destination appears in another page."
+                               :security_findings [{:url "https://example.test/b"}]}}])
+        synthesis-result
+        {:verdict "caution"
+         :reasoning "Two pages point to unexpected or outdated destinations."
+         :findings []
+         :security_findings []
+         :raw_response {:verdict "caution"
+                        :reasoning "Two pages point to unexpected or outdated destinations."}}
+        result
+        (with-redefs [verify/complete-with-retries
+                      (fn [& args]
+                        (swap! calls conj args)
+                        (if (= 3 (count args))
+                          (let [result (first @batch-results)]
+                            (swap! batch-results subvec 1)
+                            result)
+                          synthesis-result))]
+          (#'crawl/complete-llm-verification!
+           {:alida/sleep #(swap! sleeps conj %)}
+           {:inter_prompt_delay_ms 7}
+           {:id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+            :index_name "docs"}
+           ["prompt 1" "prompt 2" "prompt 3"]))]
+    (is (= 4 (count @calls)) "three verification calls plus one prose synthesis call")
+    (is (= [7 7 7] @sleeps))
+    (is (= verify/prose-summary-system-prompt (nth (last @calls) 2)))
+    (is (= "caution" (:verdict result)))
+    (is (= (str "3 verification batches reviewed: 1 passed; 2 flagged for review."
+                "\n\nReview summary:\n"
+                "Two pages point to unexpected or outdated destinations.")
+           (:reasoning result)))
+    (is (= [{:url "https://example.test/a"}] (:findings result)))
+    (is (= [{:url "https://example.test/b"}] (:security_findings result)))
+    (is (= 3 (count (get-in result [:raw_response :batches]))))
+    (is (= (:raw_response synthesis-result)
+           (get-in result [:raw_response :prose_summary])))))
+
+(deftest verification-skips-prose-call-for-one-review-reason
+  (let [calls (atom 0)
+        batch-results
+        (atom [{:verdict "pass"
+                :reasoning "No concerns."
+                :raw_response {:verdict "pass" :reasoning "No concerns."}}
+               {:verdict "caution"
+                :reasoning "Review one redirect."
+                :raw_response {:verdict "caution" :reasoning "Review one redirect."}}])
+        result
+        (with-redefs [verify/complete-with-retries
+                      (fn [& _]
+                        (swap! calls inc)
+                        (let [result (first @batch-results)]
+                          (swap! batch-results subvec 1)
+                          result))]
+          (#'crawl/complete-llm-verification!
+           {}
+           {}
+           {:id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+            :index_name "docs"}
+           ["prompt 1" "prompt 2"]))]
+    (is (= 2 @calls))
+    (is (str/includes? (:reasoning result) "Review one redirect."))
+    (is (not (contains? (:raw_response result) :prose_summary)))))
+
+(deftest prose-synthesis-failure-falls-back-to-deterministic-reasoning
+  (let [calls (atom 0)
+        batch-results
+        (atom [{:verdict "caution"
+                :reasoning "Review redirect A."
+                :raw_response {:verdict "caution" :reasoning "Review redirect A."}}
+               {:verdict "caution"
+                :reasoning "Review redirect B."
+                :raw_response {:verdict "caution" :reasoning "Review redirect B."}}])
+        result
+        (with-redefs [verify/complete-with-retries
+                      (fn [& args]
+                        (swap! calls inc)
+                        (if (= 3 (count args))
+                          (let [result (first @batch-results)]
+                            (swap! batch-results subvec 1)
+                            result)
+                          (throw (ex-info "Summary provider unavailable"
+                                          {:type :test/summary-unavailable}))))]
+          (#'crawl/complete-llm-verification!
+           {}
+           {}
+           {:id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+            :index_name "docs"}
+           ["prompt 1" "prompt 2"]))]
+    (is (= 3 @calls))
+    (is (str/includes? (:reasoning result) "Review redirect A."))
+    (is (str/includes? (:reasoning result) "Review redirect B."))
+    (is (not (contains? (:raw_response result) :prose_summary)))))
+
 (deftest verification-documents-forwards-changed-and-added-page-content
   ;; Regression: the in-memory document map has no :source_id (only attached at
   ;; persist time), while the diff entries do. verification-documents must stamp

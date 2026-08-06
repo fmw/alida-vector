@@ -60,7 +60,7 @@
                              "Content-Type" "application/json"}
                    :body (json/write-str
                           {:systemInstruction
-                           {:parts [{:text verify/system-prompt}]}
+                           {:parts [{:text (verify/completion-system-prompt provider-cfg)}]}
                            :contents [{:role "user"
                                        :parts [{:text prompt}]}]
                            :generationConfig

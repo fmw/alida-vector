@@ -580,30 +580,87 @@
   [verification-cfg]
   (not= false (:enabled verification-cfg)))
 
+(defn- wait-between-verification-prompts!
+  [sys verification-cfg]
+  (let [delay-ms (or (:inter_prompt_delay_ms verification-cfg)
+                     verify/default-inter-prompt-delay-ms)]
+    (when (pos? delay-ms)
+      (retry/sleep! sys delay-ms))))
+
+(defn- maybe-synthesize-prose!
+  [sys verification-cfg run results combined]
+  (if (or (contains? (:raw_response combined) :prose_summary)
+          (not (verify/prose-synthesis-needed? results)))
+    combined
+    (do
+      (wait-between-verification-prompts! sys verification-cfg)
+      (u/log ::verification-prose-summary-start
+             :index-name (:index_name run)
+             :run-id (:id run)
+             :batch-count (count results))
+      (try
+        (let [synthesis-result
+              (verify/complete-with-retries
+               sys
+               verification-cfg
+               verify/prose-summary-system-prompt
+               (verify/build-prose-summary-prompt results))
+              synthesized (verify/apply-prose-summary combined results synthesis-result)
+              accepted? (contains? (:raw_response synthesized) :prose_summary)]
+          (u/log ::verification-prose-summary-complete
+                 :index-name (:index_name run)
+                 :run-id (:id run)
+                 :accepted accepted?)
+          synthesized)
+        (catch Exception e
+          (u/log ::verification-prose-summary-failed
+                 :index-name (:index_name run)
+                 :run-id (:id run)
+                 :message (ex-message e)
+                 :type (:type (ex-data e)))
+          combined)))))
+
+(defn- maybe-synthesize-cached-prose!
+  [sys verification-cfg run result]
+  (if (contains? (:raw_response result) :prose_summary)
+    result
+    (try
+      (if-let [raw-batches (seq (get-in result [:raw_response :batches]))]
+        (let [results (mapv verify/parse-structured-verdict raw-batches)]
+          (maybe-synthesize-prose! sys verification-cfg run results result))
+        result)
+      (catch Exception e
+        (u/log ::verification-cached-prose-summary-skipped
+               :index-name (:index_name run)
+               :run-id (:id run)
+               :message (ex-message e)
+               :type (:type (ex-data e)))
+        result))))
+
 (defn- complete-llm-verification!
   [sys verification-cfg run prompts]
-  (verify/combine-batch-results
-   (mapv (fn [index prompt]
-           (when (and (pos? index)
-                      (pos? (or (:inter_prompt_delay_ms verification-cfg)
-                                verify/default-inter-prompt-delay-ms)))
-             (retry/sleep! sys
-                           (or (:inter_prompt_delay_ms verification-cfg)
-                               verify/default-inter-prompt-delay-ms)))
-           (u/log ::verification-prompt-start
-                  :index-name (:index_name run)
-                  :run-id (:id run)
-                  :prompt-number (inc index)
-                  :prompt-count (count prompts))
-           (verify/complete-with-retries sys verification-cfg prompt))
-         (range)
-         prompts)))
+  (let [results (mapv (fn [index prompt]
+                        (when (pos? index)
+                          (wait-between-verification-prompts! sys verification-cfg))
+                        (u/log ::verification-prompt-start
+                               :index-name (:index_name run)
+                               :run-id (:id run)
+                               :prompt-number (inc index)
+                               :prompt-count (count prompts))
+                        (verify/complete-with-retries sys verification-cfg prompt))
+                      (range)
+                      prompts)
+        combined (verify/combine-batch-results results)]
+    (maybe-synthesize-prose! sys verification-cfg run results combined)))
 
 (defn- resolve-llm-verification!
   [sys ds verification-cfg run prompts]
   (let [verification-input-hash (verify/verification-input-hash verification-cfg prompts)]
     (if-let [cached (attestation/find-result ds verification-cfg verification-input-hash)]
-      (do
+      (let [cached (update cached
+                           :llm-result
+                           #(maybe-synthesize-cached-prose!
+                             sys verification-cfg run %))]
         (u/log ::verification-attestation-reused
                :index-name (:index_name run)
                :run-id (:id run)

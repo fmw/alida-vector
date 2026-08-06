@@ -26,7 +26,11 @@ are also excluded from the hash.
 
 Attestations are enabled by default. After a provider call, Alida stores its
 structured result in `alida_verification_attestations`. A later crawl using the
-same hash and attestor reuses that result instead of calling the provider.
+same hash and attestor reuses that result instead of repeating the verification
+calls. An older batched attestation with several distinct review reasons may
+make one presentation-only synthesis call to improve its report prose. The
+stored attested verdict and findings remain authoritative if that call fails or
+disagrees with them.
 
 The examples use `gpt-5.6-terra`, the balanced cost/performance member of the
 [current GPT-5.6 family](https://developers.openai.com/api/docs/models). Use
