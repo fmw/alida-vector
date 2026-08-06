@@ -28,13 +28,19 @@ Attestations are enabled by default. After a provider call, Alida stores its
 structured result in `alida_verification_attestations`. A later crawl using the
 same hash and attestor reuses that result instead of calling the provider.
 
+The examples use `gpt-5.6-terra`, the balanced cost/performance member of the
+[current GPT-5.6 family](https://developers.openai.com/api/docs/models). Use
+`gpt-5.6-sol` when verification quality is the main priority, or
+`gpt-5.6-luna` for cost-sensitive, high-volume workloads.
+
 Give each independently operated environment a stable attestor name:
 
 ```yaml
 verification:
   provider: openai
-  model: gpt-4.1-mini
+  model: gpt-5.6-terra
   api_key: ${OPENAI_API_KEY}
+  reasoning_effort: low
   prompt_policy_version: "2026-06-08"
   deterministic_gate_version: "2026-06-08"
   attestations:
@@ -53,8 +59,9 @@ an explicit allowlist of attestor names:
 ```yaml
 verification:
   provider: openai
-  model: gpt-4.1-mini
+  model: gpt-5.6-terra
   api_key: ${OPENAI_API_KEY}
+  reasoning_effort: low
   prompt_policy_version: "2026-06-08"
   deterministic_gate_version: "2026-06-08"
   attestations:

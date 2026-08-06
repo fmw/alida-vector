@@ -12,7 +12,8 @@ verification:
   # when you want to avoid LLM API calls. Production refreshes should keep it enabled.
   enabled: true
   provider: openai
-  model: gpt-4.1-mini
+  # Balanced intelligence and cost in the current GPT-5.6 family.
+  model: gpt-5.6-terra
   api_key: ${OPENAI_API_KEY}
   # OpenAI and Azure OpenAI use temperature 0 when no generation controls are
   # configured. Set a number, or null to use the model's default.
@@ -20,7 +21,7 @@ verification:
   # Alternative sampling control; do not configure together with temperature.
   # top_p: 0.9
   # max_completion_tokens: 2048
-  # reasoning_effort: low
+  reasoning_effort: low
   # verbosity: low
   prompt_policy_version: "2026-06-08"
   deterministic_gate_version: "2026-06-08"
