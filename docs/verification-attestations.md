@@ -91,7 +91,14 @@ enabling attestations. The migration adds verification provenance to
 Attestations follow run retention rather than growing as an independent cache.
 Automatic retention and `alida-vector prune` remove an attestation after the
 last retained per-run verification referencing its hash and attestor is pruned.
-An attestation reused by any retained run remains available.
+An attestation reused by any retained run remains available. Index-scoped
+pruning considers only attestations referenced by runs removed from those
+indexes; it does not sweep unrelated orphaned attestations.
+
+Cross-environment reuse also makes the trusted environment's run retention an
+operational dependency. Keep its retention window long enough for candidate
+environments to reuse the attestations before their final trusted references
+are pruned.
 
 Grant the candidate identity only `CONNECT`, schema `USAGE`, and `SELECT` on
 the trusted attestation table. It does not need write access to the trusted

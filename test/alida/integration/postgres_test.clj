@@ -832,7 +832,7 @@
         (is (nil? (:prunable-report result)))
         (is (= 1 (:events result)))))))
 
-(deftest ^:integration prune-removes-unreferenced-verification-attestations
+(deftest ^:integration prune-removes-only-attestations-referenced-by-pruned-runs
   (let [result (with-temp-database
                  (fn [db-config ds]
                    (db/migrate! {:database db-config})
@@ -859,6 +859,14 @@
                          :model "gpt-test"
                          :verification_input_version "2"
                          :llm_verdict "pass"}))
+                     (db/save-verification-attestation!
+                      ds
+                      {:verification_input_hash "unrelated-orphan"
+                       :attestor "candidate"
+                       :provider "openai"
+                       :model "gpt-test"
+                       :verification_input_version "2"
+                       :llm_verdict "pass"})
                      (db/update-run-status! ds (:id prunable) "error")
                      (db/update-run-status! ds (:id retained) "error")
                      (jdbc/execute! ds
@@ -868,7 +876,8 @@
                                      (:id prunable)])
                      (let [pruned (db/prune-runs! ds
                                                   {:older-than (.minus (java.time.Instant/now)
-                                                                       (java.time.Duration/ofDays 30))})]
+                                                                       (java.time.Duration/ofDays 30))
+                                                   :index-names ["docs"]})]
                        {:pruned pruned
                         :attestations (jdbc/execute!
                                        ds
@@ -881,7 +890,8 @@
       (do
         (is (= 1 (get-in result [:pruned :pruned_count])))
         (is (= 1 (get-in result [:pruned :pruned_attestation_count])))
-        (is (= [{:verification_input_hash "retained-input"}]
+        (is (= [{:verification_input_hash "retained-input"}
+                {:verification_input_hash "unrelated-orphan"}]
                (:attestations result)))))))
 
 (deftest ^:integration prune-disabled-embeddings-removes-terminal-disabled-runs

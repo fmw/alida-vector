@@ -462,22 +462,39 @@
    jdbc-opts))
 
 (defn prune-unreferenced-verification-attestations!
-  [connectable]
-  (:pruned_count
-   (jdbc/execute-one!
-    connectable
-    ["WITH deleted AS (
-        DELETE FROM alida_verification_attestations AS attestation
-        WHERE NOT EXISTS (
-          SELECT 1
-          FROM alida_verifications AS verification
-          WHERE verification.verification_input_hash = attestation.verification_input_hash
-            AND verification.attestation_attestor = attestation.attestor
-        )
-        RETURNING 1
-      )
-      SELECT count(*) AS pruned_count FROM deleted"]
-    jdbc-opts)))
+  [connectable references]
+  (if (seq references)
+    (with-connection
+      connectable
+      (fn [conn]
+        (let [input-hashes (text-array conn (mapv :verification_input_hash references))
+              attestors (text-array conn (mapv :attestation_attestor references))]
+          (:pruned_count
+           (jdbc/execute-one!
+            conn
+            ["WITH candidates AS (
+                SELECT *
+                FROM unnest(?::text[], ?::text[])
+                  AS candidate(verification_input_hash, attestor)
+              ),
+              deleted AS (
+                DELETE FROM alida_verification_attestations AS attestation
+                USING candidates AS candidate
+                WHERE attestation.verification_input_hash = candidate.verification_input_hash
+                  AND attestation.attestor = candidate.attestor
+                  AND NOT EXISTS (
+                    SELECT 1
+                    FROM alida_verifications AS verification
+                    WHERE verification.verification_input_hash = attestation.verification_input_hash
+                      AND verification.attestation_attestor = attestation.attestor
+                  )
+                RETURNING 1
+              )
+              SELECT count(*) AS pruned_count FROM deleted"
+             input-hashes
+             attestors]
+            jdbc-opts)))))
+    0))
 
 (defn- vector-literal
   [embedding]
@@ -812,7 +829,16 @@
 
 (defn- prune-run!
   [tx opts run]
-  (let [partition-name (droppable-run-partition!
+  (let [attestation-reference (jdbc/execute-one!
+                               tx
+                               ["SELECT verification_input_hash, attestation_attestor
+                                 FROM alida_verifications
+                                 WHERE run_id = ?
+                                   AND verification_input_hash IS NOT NULL
+                                   AND attestation_attestor IS NOT NULL"
+                                (:id run)]
+                               jdbc-opts)
+        partition-name (droppable-run-partition!
                         tx
                         (:embedding_dimensions run)
                         (:id run))]
@@ -830,7 +856,29 @@
                                                          :older-than
                                                          :disabled-embeddings
                                                          :index-names])}})
-    (assoc run :partition partition-name)))
+    (cond-> (assoc run :partition partition-name)
+      attestation-reference
+      (assoc ::attestation-reference attestation-reference))))
+
+(defn- prune-index-runs!
+  [connectable opts index-name]
+  (with-index-lock!
+    connectable
+    index-name
+    #(jdbc/with-transaction [tx connectable]
+       (let [pruned-with-references (->> (prune-candidate-runs tx opts)
+                                         (filter (comp #{index-name} :index_name))
+                                         (mapv (partial prune-run! tx opts)))
+             references (->> pruned-with-references
+                             (keep ::attestation-reference)
+                             distinct
+                             vec)
+             pruned-attestation-count
+             (prune-unreferenced-verification-attestations! tx references)]
+         {:pruned (mapv (fn [run]
+                          (dissoc run ::attestation-reference))
+                        pruned-with-references)
+          :pruned_attestation_count pruned-attestation-count}))))
 
 (defn prune-runs!
   [connectable opts]
@@ -840,18 +888,12 @@
                          distinct
                          sort
                          vec)
-        pruned (->> index-names
-                    (mapcat
-                     (fn [index-name]
-                       (with-index-lock!
-                         connectable
-                         index-name
-                         #(jdbc/with-transaction [tx connectable]
-                            (->> (prune-candidate-runs tx opts)
-                                 (filter (comp #{index-name} :index_name))
-                                 (mapv (partial prune-run! tx opts)))))))
-                    vec)
-        pruned-attestation-count (prune-unreferenced-verification-attestations! connectable)]
+        index-results (mapv (partial prune-index-runs! connectable opts) index-names)
+        pruned (into [] (mapcat :pruned) index-results)
+        pruned-attestation-count (transduce (map :pruned_attestation_count)
+                                             +
+                                             0
+                                             index-results)]
     {:pruned pruned
      :pruned_count (count pruned)
      :pruned_attestation_count pruned-attestation-count}))

@@ -616,10 +616,8 @@
                :attestor (:attestor cached))
         (assoc cached :verification-input-hash verification-input-hash))
       (let [llm-result (complete-llm-verification! sys verification-cfg run prompts)
-            local-attestor (attestation/save-result! ds
-                                                      verification-cfg
-                                                      verification-input-hash
-                                                      llm-result)]
+            local-attestor (when (attestation/enabled? verification-cfg)
+                             (attestation/attestor verification-cfg))]
         {:llm-result llm-result
          :verification-input-hash verification-input-hash
          :source "provider"
@@ -684,6 +682,15 @@
                          :llm_result_source (:source llm-details)
                          :attestation_attestor (:attestor llm-details)}))]
     (db/save-verification! ds (:id run) verification)
+    ;; Persist the per-run reference before the reusable row. Pruning can then
+    ;; either see the reference and retain the attestation, or run first and let
+    ;; this write recreate it. This avoids an unreferenced window between the
+    ;; two writes during a concurrent crawl and prune.
+    (when (contains? #{"cache" "provider"} (:source llm-details))
+      (attestation/save-result! ds
+                                verification-cfg
+                                (:verification-input-hash llm-details)
+                                llm-result))
     verification))
 
 (defn- fail-run!
@@ -863,7 +870,8 @@
         (u/log ::history-prune-complete
                :index-names index-names
                :max-age-days max-age-days
-               :pruned-count (:pruned_count result))
+               :pruned-count (:pruned_count result)
+               :pruned-attestation-count (:pruned_attestation_count result))
         (assoc result :max_age_days max-age-days))
       (catch Exception e
         (let [message (or (ex-message e) (str e))]
