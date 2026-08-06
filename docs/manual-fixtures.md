@@ -63,8 +63,9 @@ Manual configs commonly use noop embeddings and disabled LLM verification:
 verification:
   enabled: false
   provider: openai
-  model: gpt-4.1-mini
+  model: gpt-5.6-terra
   api_key: test
+  reasoning_effort: low
 
 indexes:
   - name: fixture-crawl

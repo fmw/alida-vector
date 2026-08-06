@@ -59,6 +59,13 @@ set `temperature: null` to omit the parameter, or set the provider-supported
 default explicitly. Configuring `reasoning_effort` or `verbosity` without a
 temperature also leaves the temperature to the provider.
 
+The [current GPT-5.6 family](https://developers.openai.com/api/docs/models)
+uses `gpt-5.6-sol` for highest capability, `gpt-5.6-terra` for balanced
+cost and performance, and `gpt-5.6-luna` for cost-sensitive, high-volume
+workloads. Confirm the selected model in the
+[Azure OpenAI model catalog](https://learn.microsoft.com/en-us/azure/foundry/foundry-models/concepts/models-sold-directly-by-azure?pivots=azure-openai)
+before creating its deployment because availability varies by region.
+
 ```yaml
 verification:
   provider: azure-openai
@@ -66,9 +73,9 @@ verification:
   deployment_name: reasoning-model
   # Semantic model identity used for verification attestation hashes. Keep this
   # stable across environments whose deployment aliases serve the same model.
-  model: gpt-5.1
+  model: gpt-5.6-sol
   api_key: ${AZURE_OPENAI_API_KEY}
-  temperature: 1
+  temperature: null
   max_completion_tokens: 2048
   reasoning_effort: low
   verbosity: low
