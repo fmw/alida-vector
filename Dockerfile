@@ -9,7 +9,7 @@ COPY src ./src
 COPY resources ./resources
 RUN clojure -T:build jar
 
-FROM debian:trixie-slim@sha256:020c0d20b9880058cbe785a9db107156c3c75c2ac944a6aa7ab59f2add76a7bd AS runtime
+FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3bb48c7f8e94f258 AS runtime
 
 ENV ALIDA_VECTOR_HOME=/opt/alida-vector \
     ALIDA_VECTOR_JAR=/opt/alida-vector/alida-vector.jar \
