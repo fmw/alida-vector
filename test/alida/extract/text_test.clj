@@ -69,6 +69,22 @@
     (is (not (str/includes? (:normalized_content document) "<strong>")))
     (is (not (str/includes? (:normalized_content document) "Ignored gallery text")))))
 
+(deftest passes-html-extraction-options-to-json-html-fields
+  (let [document (extract-text/extract
+                  {:json_extract {:mode "html-fields"}}
+                  {:preserve-external-links? true
+                   :internal-hosts #{"docs.example.test"}}
+                  {:canonical_url "https://docs.example.test/guide.json"
+                   :title "guide.json"
+                   :content_type "application/json"
+                   :body (str "{\"type\":\"content_text\",\"content\":\""
+                              "<p>Read the <a href='https://docs.example.test/guide'>guide</a>.</p>"
+                              "<a href='https://video.example.test/watch/1'>Watch video</a>"
+                              "\"}")})]
+    (is (= ["Read the guide."
+            "[Watch video](<https://video.example.test/watch/1>)"]
+           (mapv :text (:blocks document))))))
+
 (deftest preserves-json-key-text
   (let [document (extract-text/extract
                   {}

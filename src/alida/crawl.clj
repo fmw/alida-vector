@@ -77,7 +77,9 @@
       (:external_id fetched) (assoc :external_id (:external_id fetched)))
 
     (text-content? (:content_type fetched))
-    (cond-> (extract-text/extract source-cfg fetched)
+    (cond-> (extract-text/extract source-cfg
+                                  (source/html-extraction-options source-cfg)
+                                  fetched)
       (:external_id fetched) (assoc :external_id (:external_id fetched)))
 
     :else
