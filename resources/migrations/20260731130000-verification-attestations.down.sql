@@ -1,7 +1,7 @@
 DROP TABLE IF EXISTS alida_verification_attestations;
 --;;
 
-DROP INDEX IF EXISTS alida_verifications_input_hash_idx;
+DROP INDEX IF EXISTS alida_verifications_attestation_idx;
 --;;
 
 ALTER TABLE alida_verifications

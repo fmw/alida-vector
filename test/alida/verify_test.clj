@@ -170,6 +170,42 @@
     (is (not= baseline
               (verify/verification-input-hash provider-cfg ["changed prompt"])))))
 
+(deftest verification-input-hash-covers-provider-endpoint-semantics
+  (let [prompts ["verify this"]
+        azure-cfg {:provider "azure-openai"
+                   :endpoint "https://pre-production.openai.azure.com"
+                   :deployment_name "pre-production-verifier"
+                   :model "gpt-test-2026-08-01"
+                   :api_version "2024-02-01"}
+        azure-hash (verify/verification-input-hash azure-cfg prompts)
+        vertex-cfg {:provider "vertex-ai"
+                    :project "pre-production-project"
+                    :location "europe-west4"
+                    :model "gemini-test"}
+        vertex-hash (verify/verification-input-hash vertex-cfg prompts)]
+    (is (not= azure-hash
+              (verify/verification-input-hash
+               (assoc azure-cfg :api_version "2026-01-01")
+               prompts)))
+    (is (= azure-hash
+           (verify/verification-input-hash
+            (dissoc azure-cfg :api_version)
+            prompts)))
+    (is (= azure-hash
+           (verify/verification-input-hash
+            (assoc azure-cfg
+                   :endpoint "https://candidate.openai.azure.com"
+                   :deployment_name "candidate-verifier")
+            prompts)))
+    (is (not= vertex-hash
+              (verify/verification-input-hash
+               (assoc vertex-cfg :location "us-central1")
+               prompts)))
+    (is (= vertex-hash
+           (verify/verification-input-hash
+            (assoc vertex-cfg :project "candidate-project")
+            prompts)))))
+
 (deftest build-prompts-batch-url-level-diff-without-dropping-entries
   (let [prompts (verify/build-prompts
                  {:run_id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"

@@ -634,8 +634,7 @@
   (let [verification-cfg (:verification (:alida/config sys))
         llm-details (when (llm-verification-enabled? verification-cfg)
                       (let [prompts (verify/build-prompts
-                                     {:run_id (:id run)
-                                      :index_name (:index_name run)
+                                     {:index_name (:index_name run)
                                       :deterministic_verification deterministic-verification
                                       :diff run-diff
                                       :documents (verification-documents source-results run-diff)

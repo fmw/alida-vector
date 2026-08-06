@@ -86,7 +86,7 @@
 
 (def required-verification-keys
   {"openai" [:model :api_key]
-   "azure-openai" [:endpoint :deployment_name :api_key]
+   "azure-openai" [:endpoint :deployment_name :model :api_key]
    "vertex-ai" [:project :location :model]})
 
 (defn- verification-enabled?

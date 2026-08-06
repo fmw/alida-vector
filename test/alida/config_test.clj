@@ -381,6 +381,7 @@ indexes:
 verification:
   provider: azure-openai
   deployment_name: gpt-5.1
+  model: gpt-5.1
   api_key: test-key
 indexes:
   - name: docs
@@ -403,6 +404,17 @@ indexes:
                             (config/load-config (.getPath file))))
       (finally
         (.delete file)))))
+
+(deftest azure-openai-verification-model-is-required
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo
+       #"provider azure-openai requires model"
+       (load-from-map
+        (assoc valid-config
+               :verification {:provider "azure-openai"
+                              :endpoint "https://example.openai.azure.com"
+                              :deployment_name "verifier"
+                              :api_key "test-key"})))))
 
 (deftest vertex-ai-verification-project-is-required
   (let [file (java.io.File/createTempFile "alida-vertex-ai-verification-provider" ".yml")]

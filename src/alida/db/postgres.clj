@@ -109,13 +109,15 @@
 (def default-max-pool-size 10)
 
 (defn datasource
-  [{:keys [jdbc_url user username password max_pool_size]}]
+  [{:keys [jdbc_url user username password max_pool_size read_only]}]
   (let [cfg (HikariConfig.)]
     (.setJdbcUrl cfg jdbc_url)
     (when (or username user)
       (.setUsername cfg (or username user)))
     (when password
       (.setPassword cfg password))
+    (when read_only
+      (.setReadOnly cfg true))
     ;; Must comfortably exceed per-run concurrency: a crawl holds one connection
     ;; for its advisory lock plus a transaction connection plus reuse/diff queries,
     ;; and concurrent index crawls multiply that.
@@ -431,7 +433,6 @@
          llm_findings = EXCLUDED.llm_findings,
          llm_security_findings = EXCLUDED.llm_security_findings,
          raw_response = EXCLUDED.raw_response,
-         created_at = now(),
          last_used_at = now()
      RETURNING *"
     verification_input_hash
@@ -459,6 +460,24 @@
     verification-input-hash
     attestor]
    jdbc-opts))
+
+(defn prune-unreferenced-verification-attestations!
+  [connectable]
+  (:pruned_count
+   (jdbc/execute-one!
+    connectable
+    ["WITH deleted AS (
+        DELETE FROM alida_verification_attestations AS attestation
+        WHERE NOT EXISTS (
+          SELECT 1
+          FROM alida_verifications AS verification
+          WHERE verification.verification_input_hash = attestation.verification_input_hash
+            AND verification.attestation_attestor = attestation.attestor
+        )
+        RETURNING 1
+      )
+      SELECT count(*) AS pruned_count FROM deleted"]
+    jdbc-opts)))
 
 (defn- vector-literal
   [embedding]
@@ -821,18 +840,21 @@
                          distinct
                          sort
                          vec)
-        pruned (mapcat
-                (fn [index-name]
-                  (with-index-lock!
-                    connectable
-                    index-name
-                    #(jdbc/with-transaction [tx connectable]
-                       (->> (prune-candidate-runs tx opts)
-                            (filter (comp #{index-name} :index_name))
-                            (mapv (partial prune-run! tx opts))))))
-                index-names)]
+        pruned (->> index-names
+                    (mapcat
+                     (fn [index-name]
+                       (with-index-lock!
+                         connectable
+                         index-name
+                         #(jdbc/with-transaction [tx connectable]
+                            (->> (prune-candidate-runs tx opts)
+                                 (filter (comp #{index-name} :index_name))
+                                 (mapv (partial prune-run! tx opts)))))))
+                    vec)
+        pruned-attestation-count (prune-unreferenced-verification-attestations! connectable)]
     {:pruned pruned
-     :pruned_count (count pruned)}))
+     :pruned_count (count pruned)
+     :pruned_attestation_count pruned-attestation-count}))
 
 (defn search-live-chunks
   [connectable embedding-dimensions query-embedding {:keys [index_names limit]}]

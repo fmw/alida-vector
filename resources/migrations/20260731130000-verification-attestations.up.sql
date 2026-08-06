@@ -4,8 +4,10 @@ ALTER TABLE alida_verifications
   ADD COLUMN attestation_attestor text;
 --;;
 
-CREATE INDEX alida_verifications_input_hash_idx
-  ON alida_verifications(verification_input_hash);
+CREATE INDEX alida_verifications_attestation_idx
+  ON alida_verifications(verification_input_hash, attestation_attestor)
+  WHERE verification_input_hash IS NOT NULL
+    AND attestation_attestor IS NOT NULL;
 --;;
 
 CREATE TABLE alida_verification_attestations (
@@ -25,7 +27,3 @@ CREATE TABLE alida_verification_attestations (
   last_used_at timestamptz NOT NULL DEFAULT now(),
   PRIMARY KEY (verification_input_hash, attestor)
 );
---;;
-
-CREATE INDEX alida_verification_attestations_created_idx
-  ON alida_verification_attestations(created_at DESC);

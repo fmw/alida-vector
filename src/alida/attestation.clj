@@ -17,6 +17,7 @@
   [source]
   (-> source
       (dissoc :name :type :attestors)
+      (assoc :read_only true)
       (update :max_pool_size #(or % 1))))
 
 (defn- attestation->llm-result

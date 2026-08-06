@@ -46,6 +46,7 @@
     (is (= {:jdbc_url "jdbc:postgresql://example.test/attestations"
             :user "reader"
             :password "secret"
+            :read_only true
             :max_pool_size 1}
            @opened-config))
     (is @closed?)))
@@ -95,7 +96,7 @@
             :model "gpt-test"
             :prompt_policy_version "policy-1"
             :deterministic_gate_version "gate-1"
-            :verification_input_version "1"
+            :verification_input_version "2"
             :llm_verdict "caution"
             :reasoning "Review this"
             :llm_findings [{:type "possible-issue"}]

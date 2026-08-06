@@ -13,7 +13,8 @@
 (def default-retry-jitter-ms 0)
 (def default-inter-prompt-delay-ms 0)
 
-(def verification-input-version "1")
+(def verification-input-version "2")
+(def default-azure-openai-api-version "2024-02-01")
 
 (def chat-completion-parameter-keys
   [:temperature :top_p :max_completion_tokens :reasoning_effort :verbosity])
@@ -23,6 +24,14 @@
   (or (:model provider-cfg)
       (:deployment_name provider-cfg)
       (:provider provider-cfg)))
+
+(defn- provider-endpoint-semantics
+  [provider-cfg]
+  (case (:provider provider-cfg)
+    "azure-openai" {:api_version (or (:api_version provider-cfg)
+                                      default-azure-openai-api-version)}
+    "vertex-ai" {:location (:location provider-cfg)}
+    {}))
 
 (defn chat-completion-parameters
   "Build optional OpenAI-compatible chat completion parameters. Use
@@ -683,6 +692,7 @@
   (-> {:verification_input_version verification-input-version
        :provider (:provider provider-cfg)
        :model (verifier-model provider-cfg)
+       :provider_endpoint_semantics (provider-endpoint-semantics provider-cfg)
        :prompt_policy_version (:prompt_policy_version provider-cfg)
        :deterministic_gate_version (:deterministic_gate_version provider-cfg)
        :provider_parameters (chat-completion-parameters provider-cfg)

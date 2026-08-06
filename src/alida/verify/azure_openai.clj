@@ -5,7 +5,7 @@
   (:import [java.net URLEncoder]))
 
 (def default-api-version
-  "2024-02-01")
+  verify/default-azure-openai-api-version)
 
 (defn- encode
   [value]
