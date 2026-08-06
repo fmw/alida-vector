@@ -1,4 +1,4 @@
-FROM clojure:temurin-26-tools-deps-trixie-slim@sha256:adaac09e23c97ff19010a28a6b84e670f6bd4d8459d3a8b1979ebdf58c2b737e AS builder
+FROM clojure:temurin-26-tools-deps-trixie-slim@sha256:a01b3fc136f87eda8b00d86d1e0af98617be126d2c01500fd784059fc75d6a8d AS builder
 
 WORKDIR /workspace
 
