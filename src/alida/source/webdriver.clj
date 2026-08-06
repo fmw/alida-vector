@@ -70,26 +70,16 @@
 
 (def cleanup-script
   ;; Generic, site-agnostic cleanup. The live DOM is read but never mutated:
-  ;; link replacement, selector removal, and description prepending all happen on
-  ;; a detached clone of the content element. Mutating the live page while a SPA
+  ;; selector removal and description prepending happen on a detached clone of
+  ;; the content element. Mutating the live page while a SPA
   ;; is still hydrating throws its scripts into a busy loop that wedges the
   ;; renderer (every later WebDriver call then fails with "timed out receiving
-  ;; message from renderer"). arguments: [removeSelectors internalHosts
-  ;; preserveExternalLinks description]; description (optional) is prepended to
+  ;; message from renderer"). arguments: [removeSelectors description];
+  ;; description (optional) is prepended to
   ;; the content when present, letting a render profile inject site-specific
   ;; metadata without this script knowing where it came from.
   "const removeSelectors = arguments[0] || [];
-   const internalHosts = new Set((arguments[1] || []).map(host => String(host).toLowerCase()));
-   const preserveExternalLinks = arguments[2] !== false;
-   const description = arguments[3] || null;
-
-   const linkHost = href => {
-     try {
-       return new URL(href, window.location.href).hostname.toLowerCase();
-     } catch (e) {
-       return null;
-     }
-   };
+   const description = arguments[1] || null;
 
    const contentSelector = '#main-content, #content, #main, .content, main, article, body';
    const hrefs = new Set();
@@ -118,17 +108,6 @@
    }
 
    const clone = content ? content.cloneNode(true) : null;
-
-   if (clone && preserveExternalLinks) {
-     clone.querySelectorAll('a[href]').forEach(a => {
-       const href = a.href || a.getAttribute('href');
-       const text = (a.textContent || '').trim();
-       const host = linkHost(href);
-       if (href && text && host && !internalHosts.has(host)) {
-         a.replaceWith(document.createTextNode(`[${text}](${href})`));
-       }
-     });
-   }
 
    if (clone) {
      for (const selector of removeSelectors) {
@@ -202,12 +181,6 @@
   [source-cfg]
   (render-profile (:render_profile source-cfg)))
 
-(defn- source-urls
-  [source-cfg]
-  (or (seq (:start_urls source-cfg))
-      (when-let [url (:start_url source-cfg)] [url])
-      (when-let [url (:url source-cfg)] [url])))
-
 (defn- max-pages
   [source-cfg]
   (or (:max_pages source-cfg)
@@ -274,18 +247,10 @@
   (or (:progress_log_every_pages source-cfg)
       default-progress-log-every-pages))
 
-(defn- internal-link-hosts
-  [source-cfg]
-  (vec
-   (distinct
-    (remove str/blank?
-            (concat (keep url/host (source-urls source-cfg))
-                    (:internal_link_hosts source-cfg))))))
-
 (defn- allowed-url-prefixes
   [source-cfg]
   (or (seq (:allowed_url_prefixes source-cfg))
-      (keep url/origin (source-urls source-cfg))))
+      (keep url/origin (source/source-urls source-cfg))))
 
 (defn- url-allowed?
   [source-cfg url]
@@ -296,7 +261,7 @@
   [source-cfg url]
   (boolean
    (when-let [h (url/host url)]
-     (contains? (set (internal-link-hosts source-cfg)) h))))
+     (contains? (set (source/internal-link-hosts source-cfg)) h))))
 
 (defn- navigable?
   "SSRF + scope guard for URLs sourced from untrusted rendered content (iframe
@@ -492,8 +457,6 @@
   (e/js-execute driver
                 cleanup-script
                 (remove-selectors source-cfg)
-                (internal-link-hosts source-cfg)
-                (:preserve_external_links source-cfg)
                 description))
 
 (defn- page-info
@@ -722,7 +685,7 @@
 
 (defn- discover-rendered-sequential
   [_sys source-cfg]
-  (let [starts (source-urls source-cfg)]
+  (let [starts (source/source-urls source-cfg)]
     (when-not (seq starts)
       (throw (ex-info "WebDriver source requires url, start_url, or start_urls"
                       {:type :alida.source.webdriver/missing-url
@@ -929,7 +892,7 @@
 
 (defn discover-rendered
   [sys source-cfg]
-  (let [starts (source-urls source-cfg)]
+  (let [starts (source/source-urls source-cfg)]
     (when-not (seq starts)
       (throw (ex-info "WebDriver source requires url, start_url, or start_urls"
                       {:type :alida.source.webdriver/missing-url
@@ -961,3 +924,7 @@
 (defmethod source/fetch :webdriver
   [sys source-cfg discovered-item]
   (fetch-rendered sys source-cfg discovered-item))
+
+(defmethod source/html-extraction-options :webdriver
+  [source-cfg]
+  (source/external-link-extraction-options source-cfg))

@@ -14,15 +14,9 @@
 (def default-webdriver-max-concurrency 5)
 (def default-category-page-limit 100)
 
-(defn- source-urls
-  [source-cfg]
-  (or (seq (:start_urls source-cfg))
-      (when-let [url (:start_url source-cfg)] [url])
-      (when-let [url (:url source-cfg)] [url])))
-
 (defn- source-origins
   [source-cfg]
-  (set (keep url/origin (source-urls source-cfg))))
+  (set (keep url/origin (source/source-urls source-cfg))))
 
 (defn- max-pages
   [source-cfg]
@@ -393,7 +387,7 @@
 
 (defn- discover-api*
   [pool sys source-cfg]
-  (let [starts (source-urls source-cfg)]
+  (let [starts (source/source-urls source-cfg)]
     (when-not (seq starts)
       (throw (ex-info "Jira Service Management source requires url, start_url, or start_urls"
                       {:type :alida.source.jira-service-management/missing-url
@@ -678,3 +672,7 @@
                       {:type :alida.source.jira-service-management/missing-api-body
                        :source-id (:id source-cfg)
                        :canonical-url (:canonical_url discovered-item)}))))
+
+(defmethod source/html-extraction-options :jira-service-management
+  [source-cfg]
+  (source/external-link-extraction-options source-cfg))

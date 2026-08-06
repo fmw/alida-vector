@@ -1,6 +1,7 @@
 (ns alida.source.webdriver-test
   (:require [alida.source :as source]
             [alida.source.webdriver :as webdriver]
+            [clojure.string :as str]
             [clojure.test :refer [deftest is]]
             [etaoin.api :as e]))
 
@@ -13,6 +14,10 @@
    :title (str "Page " url)
    :body (str "<main><h1>" url "</h1><p>Rendered article.</p></main>")
    :hrefs hrefs})
+
+(deftest cleanup-script-leaves-links-for-shared-html-extraction
+  (is (str/includes? webdriver/cleanup-script "clone.outerHTML"))
+  (is (not (str/includes? webdriver/cleanup-script "replaceWith"))))
 
 (deftest navigable?-enforces-host-allowlist-and-scope-rules
   (let [navigable? #'webdriver/navigable?
