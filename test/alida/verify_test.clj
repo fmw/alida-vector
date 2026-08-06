@@ -422,6 +422,105 @@
                         (verify/parse-structured-verdict
                          (json/write-str {:verdict "maybe"})))))
 
+(deftest combine-single-batch-preserves-provider-reasoning
+  (is (= {:verdict "caution"
+          :reasoning "Review the redirect chain."
+          :findings []
+          :security_findings []
+          :raw_response
+          {:summary {:batch_count 1
+                     :verdict_counts {"pass" 0 "caution" 1 "fail" 0}}
+           :batches [{:verdict "caution"
+                      :reasoning "Review the redirect chain."}]}}
+         (verify/combine-batch-results
+          [{:verdict "caution"
+            :reasoning "Review the redirect chain."
+            :findings []
+            :security_findings []
+            :raw_response {:verdict "caution"
+                           :reasoning "Review the redirect chain."}}]))))
+
+(deftest combine-passing-batches-replaces-repeated-reasoning-with-a-tally
+  (let [results [{:verdict "pass"
+                  :reasoning "The first batch looks safe."
+                  :findings [{:type "informational"}]
+                  :security_findings []
+                  :raw_response {:verdict "pass"
+                                 :reasoning "The first batch looks safe."
+                                 :findings [{:type "informational"}]}}
+                 {:verdict "pass"
+                  :reasoning "The second batch looks safe."
+                  :findings [{:type "informational"}]
+                  :security_findings []
+                  :raw_response {:verdict "pass"
+                                 :reasoning "The second batch looks safe."
+                                 :findings [{:type "informational"}]}}]
+        combined (verify/combine-batch-results results)]
+    (is (= "pass" (:verdict combined)))
+    (is (= "All 2 verification batches passed." (:reasoning combined)))
+    (is (= [{:type "informational"}] (:findings combined)))
+    (is (= {:batch_count 2
+            :verdict_counts {"pass" 2 "caution" 0 "fail" 0}}
+           (get-in combined [:raw_response :summary])))
+    (is (= (mapv :raw_response results)
+           (get-in combined [:raw_response :batches])))))
+
+(deftest combine-mixed-batches-keeps-only-distinct-review-reasons
+  (let [duplicate-finding {:type "suspicious-link"}
+        results [{:verdict "pass"
+                  :reasoning "No concerns."
+                  :raw_response {:verdict "pass" :reasoning "No concerns."}}
+                 {:verdict "caution"
+                  :reasoning "Review the unexpected links."
+                  :security_findings [duplicate-finding]
+                  :raw_response {:verdict "caution"
+                                 :reasoning "Review the unexpected links."
+                                 :security_findings [duplicate-finding]}}
+                 {:verdict "pass"
+                  :reasoning "No concerns in this batch."
+                  :raw_response {:verdict "pass" :reasoning "No concerns in this batch."}}
+                 {:verdict "caution"
+                  :reasoning "Review the unexpected links."
+                  :security_findings [duplicate-finding]
+                  :raw_response {:verdict "caution"
+                                 :reasoning "Review the unexpected links."
+                                 :security_findings [duplicate-finding]}}
+                 {:verdict "fail"
+                  :reasoning "A credential is exposed."
+                  :raw_response {:verdict "fail" :reasoning "A credential is exposed."}}]
+        combined (verify/combine-batch-results results)]
+    (is (= "fail" (:verdict combined)))
+    (is (= (str "5 verification batches reviewed: 2 passed; 2 flagged for review; 1 failed."
+                "\n\nReview reasons:"
+                "\n- Batches 2 and 4 (caution): Review the unexpected links."
+                "\n- Batch 5 (fail): A credential is exposed.")
+           (:reasoning combined)))
+    (is (not (str/includes? (:reasoning combined) "No concerns")))
+    (is (= [duplicate-finding] (:security_findings combined)))))
+
+(deftest normalize-cached-batch-results-without-losing-raw-evidence
+  (let [raw-batches [{:verdict "pass" :reasoning "First batch passed."}
+                     {:verdict "caution" :reasoning "Review this batch."}]
+        normalized (verify/normalize-batched-result
+                    {:verdict "caution"
+                     :reasoning "First batch passed.\n\nReview this batch."
+                     :findings []
+                     :security_findings []
+                     :raw_response {:provider_request_id "request-1"
+                                    :batches raw-batches}})]
+    (is (= (str "2 verification batches reviewed: 1 passed; 1 flagged for review."
+                "\n\nReview reason:"
+                "\n- Batch 2 (caution): Review this batch.")
+           (:reasoning normalized)))
+    (is (= "request-1"
+           (get-in normalized [:raw_response :provider_request_id])))
+    (is (= raw-batches (get-in normalized [:raw_response :batches])))))
+
+(deftest combine-batch-results-requires-at-least-one-result
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"empty set"
+                        (verify/combine-batch-results []))))
+
 (deftest azure-openai-verification-retries-retryable-errors
   (let [responses (atom [{:status 429
                           :headers {"Retry-After" "2"}

@@ -174,3 +174,21 @@
     (is (str/includes? full-report "Timings"))
     (is (str/includes? full-report "Embedding"))
     (is (str/includes? full-report "- website (website): documents=2"))))
+
+(deftest full-report-makes-llm-batching-explicit
+  (let [reasoning (str "3 verification batches reviewed: 2 passed; 1 flagged for review."
+                       "\n\nReview reason:"
+                       "\n- Batch 3 (caution): Review an unexpected redirect.")
+        full-report (:full_report
+                     (report/build
+                      (assoc summary
+                             :verification_verdict "caution"
+                             :verification
+                             {:llm_verdict "caution"
+                              :reasoning reasoning
+                              :raw_response
+                              {:summary {:batch_count 3
+                                         :verdict_counts
+                                         {"pass" 2 "caution" 1 "fail" 0}}}})))]
+    (is (str/includes? full-report "LLM Verification\nverdict: caution\nbatches: 3"))
+    (is (= 1 (count (re-seq #"Review an unexpected redirect" full-report))))))

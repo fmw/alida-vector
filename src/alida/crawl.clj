@@ -580,17 +580,9 @@
   [verification-cfg]
   (not= false (:enabled verification-cfg)))
 
-(defn- combined-llm-result
-  [results]
-  {:verdict (apply verify/strictest-verdict (map :verdict results))
-   :reasoning (str/join "\n\n" (keep :reasoning results))
-   :findings (vec (mapcat #(or (:findings %) []) results))
-   :security_findings (vec (mapcat #(or (:security_findings %) []) results))
-   :raw_response {:batches (mapv :raw_response results)}})
-
 (defn- complete-llm-verification!
   [sys verification-cfg run prompts]
-  (combined-llm-result
+  (verify/combine-batch-results
    (mapv (fn [index prompt]
            (when (and (pos? index)
                       (pos? (or (:inter_prompt_delay_ms verification-cfg)

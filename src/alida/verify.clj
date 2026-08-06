@@ -712,6 +712,107 @@
      :security_findings (vec (or (:security_findings parsed) []))
      :raw_response parsed}))
 
+(defn- distinct-values
+  [values]
+  (vec (distinct values)))
+
+(defn- batch-outcome
+  [verdict count]
+  (case verdict
+    "pass" (str count " passed")
+    "caution" (str count " flagged for review")
+    "fail" (str count " failed")))
+
+(defn- outcome-summary
+  [results]
+  (let [batch-count (count results)
+        counts (frequencies (map :verdict results))]
+    (if (= batch-count (get counts "pass" 0))
+      (str "All " batch-count " verification batches passed.")
+      (str batch-count
+           " verification batches reviewed: "
+           (str/join "; "
+                     (keep (fn [verdict]
+                             (when-let [count (get counts verdict)]
+                               (batch-outcome verdict count)))
+                           ["pass" "caution" "fail"]))
+           "."))))
+
+(defn- joined-batch-numbers
+  [numbers]
+  (case (count numbers)
+    1 (str (first numbers))
+    2 (str (first numbers) " and " (second numbers))
+    (str (str/join ", " (butlast numbers)) ", and " (last numbers))))
+
+(defn- review-reason-groups
+  [results]
+  (->> results
+       (map-indexed (fn [index result]
+                      (assoc result
+                             :batch-number (inc index)
+                             :reasoning (str/trim (or (:reasoning result) "")))))
+       (remove #(= "pass" (:verdict %)))
+       (group-by (juxt :verdict :reasoning))
+       vals
+       (sort-by #(-> % first :batch-number))))
+
+(defn- review-reason-line
+  [group]
+  (let [{:keys [verdict reasoning]} (first group)
+        numbers (mapv :batch-number group)]
+    (str "- "
+         (if (= 1 (count numbers)) "Batch " "Batches ")
+         (joined-batch-numbers numbers)
+         " (" verdict "): "
+         (if (seq reasoning) reasoning "No reasoning was provided."))))
+
+(defn- combined-reasoning
+  [results]
+  (if (= 1 (count results))
+    (:reasoning (first results))
+    (let [groups (review-reason-groups results)]
+      (str (outcome-summary results)
+           (when (seq groups)
+             (str "\n\n"
+                  (if (= 1 (count groups)) "Review reason:" "Review reasons:")
+                  "\n"
+                  (str/join "\n" (map review-reason-line groups))))))))
+
+(defn combine-batch-results
+  "Combine provider results into one concise run-level result. Pass reasoning is
+   omitted when a verification required multiple prompts; distinct non-pass
+   reasons remain visible and all raw provider responses remain available for
+   auditing."
+  [results]
+  (when-not (seq results)
+    (throw (ex-info "Cannot combine an empty set of verification batch results"
+                    {:type :alida.verify/empty-batch-results})))
+  (let [results (vec results)
+        verdict-counts (merge {"pass" 0 "caution" 0 "fail" 0}
+                              (frequencies (map :verdict results)))]
+    {:verdict (apply strictest-verdict (map :verdict results))
+     :reasoning (combined-reasoning results)
+     :findings (distinct-values (mapcat #(or (:findings %) []) results))
+     :security_findings (distinct-values
+                         (mapcat #(or (:security_findings %) []) results))
+     :raw_response {:summary {:batch_count (count results)
+                              :verdict_counts verdict-counts}
+                    :batches (mapv :raw_response results)}}))
+
+(defn normalize-batched-result
+  "Rebuild a concise aggregate from retained raw batches. This keeps cached
+   attestations created by older versions human-friendly without another
+   provider request. Non-batched results are returned unchanged."
+  [result]
+  (if-let [raw-batches (seq (get-in result [:raw_response :batches]))]
+    (let [combined (combine-batch-results
+                    (mapv parse-structured-verdict raw-batches))]
+      (assoc combined
+             :raw_response (merge (:raw_response result)
+                                  (:raw_response combined))))
+    result))
+
 (defn- dispatch-provider
   [_sys provider-cfg & _]
   (keyword (:provider provider-cfg)))

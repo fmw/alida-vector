@@ -64,6 +64,27 @@
                                                verification-cfg
                                                "input-hash")))))))
 
+(deftest cached-batch-reasoning-is-normalized-for-current-reports
+  (let [raw-batches [{:verdict "pass" :reasoning "Batch one passed."}
+                     {:verdict "caution" :reasoning "Review batch two."}]
+        verification-cfg {:attestations {:attestor "candidate"}}]
+    (with-redefs [db/find-verification-attestation
+                  (fn [& _]
+                    (assoc cached-record
+                           :attestor "candidate"
+                           :llm_verdict "caution"
+                           :reasoning "Batch one passed.\n\nReview batch two."
+                           :raw_response {:batches raw-batches}))]
+      (let [result (:llm-result
+                    (attestation/find-result :local-ds
+                                             verification-cfg
+                                             "input-hash"))]
+        (is (= (str "2 verification batches reviewed: 1 passed; 1 flagged for review."
+                    "\n\nReview reason:"
+                    "\n- Batch 2 (caution): Review batch two.")
+               (:reasoning result)))
+        (is (= raw-batches (get-in result [:raw_response :batches])))))))
+
 (deftest provider-results-are-saved-as-local-attestations
   (let [saved (atom nil)
         verification-cfg {:provider "openai"
