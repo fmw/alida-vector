@@ -1,6 +1,7 @@
 (ns alida.attestation-test
   (:require [alida.attestation :as attestation]
             [alida.db.postgres :as db]
+            [alida.verify :as verify]
             [clojure.test :refer [deftest is]]))
 
 (def cached-record
@@ -11,6 +12,16 @@
    :llm_findings [{:type "consistent"}]
    :llm_security_findings []
    :raw_response {:verdict "pass"}})
+
+(deftest attested-verdicts-are-normalized-and-validated-on-read
+  (let [result (#'attestation/attestation->llm-result
+                (assoc cached-record :llm_verdict "FAIL"))]
+    (is (= "fail" (:verdict result)))
+    (is (= "fail" (verify/strictest-verdict (:verdict result) "pass"))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"Invalid verification verdict"
+                        (#'attestation/attestation->llm-result
+                         (assoc cached-record :llm_verdict "unknown")))))
 
 (deftest trusted-attestations-take-precedence-over-the-local-cache
   (let [opened-config (atom nil)

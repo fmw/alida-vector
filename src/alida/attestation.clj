@@ -23,7 +23,7 @@
 (defn- attestation->llm-result
   [{:keys [llm_verdict reasoning llm_findings llm_security_findings raw_response]}]
   (verify/normalize-batched-result
-   {:verdict llm_verdict
+   {:verdict (verify/require-verdict! llm_verdict)
     :reasoning (or reasoning "")
     :findings (vec (or llm_findings []))
     :security_findings (vec (or llm_security_findings []))
