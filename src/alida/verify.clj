@@ -84,9 +84,11 @@
        "reasoning, findings, and security_findings. Copy the authoritative verdict exactly; "
        "return empty arrays for findings and security_findings."))
 
-(defn completion-system-prompt
-  [provider-cfg]
-  (or (::system-prompt provider-cfg) system-prompt))
+(def prose-summary-version
+  "1")
+
+(def minimum-prose-summary-review-reasons
+  3)
 
 (defn require-config!
   [provider-cfg k]
@@ -733,18 +735,38 @@
     "caution" (str n " flagged for review")
     "fail" (str n " failed")))
 
-(defn- outcome-summary
+(defn- verdict-count
+  [summary verdict]
+  (let [counts (:verdict_counts summary)]
+    (or (get counts verdict)
+        (get counts (keyword verdict))
+        0)))
+
+(defn- batch-summary
   [results]
-  (let [batch-count (count results)
-        counts (frequencies (map :verdict results))]
-    (if (= batch-count (get counts "pass" 0))
+  {:batch_count (count results)
+   :verdict_counts (merge {"pass" 0 "caution" 0 "fail" 0}
+                          (frequencies (map :verdict results)))})
+
+(defn- summary-verdict
+  [summary]
+  (let [verdicts (filter #(pos? (verdict-count summary %))
+                         ["pass" "caution" "fail"])]
+    (when (seq verdicts)
+      (apply strictest-verdict verdicts))))
+
+(defn- outcome-summary
+  [summary]
+  (let [batch-count (:batch_count summary)]
+    (if (= batch-count (verdict-count summary "pass"))
       (str "All " batch-count " verification batches passed.")
       (str batch-count
            " verification batches reviewed: "
            (str/join "; "
                      (keep (fn [verdict]
-                             (when-let [n (get counts verdict)]
-                               (batch-outcome verdict n)))
+                             (let [n (verdict-count summary verdict)]
+                               (when (pos? n)
+                                 (batch-outcome verdict n))))
                            ["pass" "caution" "fail"]))
            "."))))
 
@@ -776,23 +798,47 @@
          " (" verdict "): "
          (if (seq reasoning) reasoning "No reasoning was provided."))))
 
-(defn- combined-reasoning
+(defn- batch-review-details
   [results]
+  (let [groups (review-reason-groups results)]
+    (when (seq groups)
+      (str (if (= 1 (count groups)) "Review reason:" "Review reasons:")
+           "\n"
+           (str/join "\n" (map review-reason-line groups))))))
+
+(defn- combined-reasoning
+  [results summary]
   (if (= 1 (count results))
     (:reasoning (first results))
-    (let [groups (review-reason-groups results)]
-      (str (outcome-summary results)
-           (when (seq groups)
-             (str "\n\n"
-                  (if (= 1 (count groups)) "Review reason:" "Review reasons:")
-                  "\n"
-                  (str/join "\n" (map review-reason-line groups))))))))
+    (str (outcome-summary summary)
+         (when-let [details (batch-review-details results)]
+           (str "\n\n" details)))))
+
+(defn- prose-synthesis-compatible?
+  [combined results]
+  (let [stored-summary (get-in combined [:raw_response :summary])
+        parsed-summary (batch-summary results)]
+    (and (= (:verdict combined)
+            (summary-verdict stored-summary)
+            (summary-verdict parsed-summary))
+         (= (:batch_count stored-summary) (:batch_count parsed-summary))
+         (every? #(= (verdict-count stored-summary %)
+                     (verdict-count parsed-summary %))
+                 ["pass" "caution" "fail"]))))
 
 (defn prose-synthesis-needed?
-  "True when deterministic formatting would show multiple distinct review
-   reasons that would benefit from semantic grouping."
-  [results]
-  (< 1 (count (review-reason-groups results))))
+  "True when at least three distinct review reasons would benefit from semantic
+   grouping and the raw batch tally agrees with the authoritative result."
+  [combined results]
+  (and (<= minimum-prose-summary-review-reasons
+           (count (review-reason-groups results)))
+       (prose-synthesis-compatible? combined results)))
+
+(defn prose-summary-current?
+  [result]
+  (and (contains? (:raw_response result) :prose_summary)
+       (= prose-summary-version
+          (get-in result [:raw_response :prose_summary_version]))))
 
 (defn build-prose-summary-prompt
   [results]
@@ -823,30 +869,36 @@
     (throw (ex-info "Cannot combine an empty set of verification batch results"
                     {:type :alida.verify/empty-batch-results})))
   (let [results (mapv #(update % :verdict require-verdict!) results)
-        verdict-counts (merge {"pass" 0 "caution" 0 "fail" 0}
-                              (frequencies (map :verdict results)))]
+        summary (batch-summary results)]
     {:verdict (apply strictest-verdict (map :verdict results))
-     :reasoning (combined-reasoning results)
+     :reasoning (combined-reasoning results summary)
      :findings (vec (mapcat #(or (:findings %) []) results))
      :security_findings (vec (mapcat #(or (:security_findings %) []) results))
-     :raw_response {:summary {:batch_count (count results)
-                              :verdict_counts verdict-counts}
+     :raw_response {:summary summary
                     :batches (mapv :raw_response results)}}))
 
 (defn apply-prose-summary
   "Use a presentation-only synthesis result without allowing it to change the
    authoritative verdict or findings. Returns the deterministic result when the
-   synthesis response is empty or disagrees with the verdict."
+   synthesis response is empty, the stored and raw tallies disagree, or the
+   synthesis verdict disagrees with the authoritative verdict."
   [combined results synthesis-result]
-  (let [reasoning (str/trim (or (:reasoning synthesis-result) ""))]
-    (if (and (= (:verdict combined) (:verdict synthesis-result))
+  (let [reasoning (str/trim (or (:reasoning synthesis-result) ""))
+        summary (get-in combined [:raw_response :summary])]
+    (if (and (prose-synthesis-compatible? combined results)
+             (= (:verdict combined) (:verdict synthesis-result))
              (seq reasoning))
-      (-> combined
-          (assoc :reasoning (str (outcome-summary results)
-                                 "\n\nReview summary:\n"
-                                 reasoning))
-          (assoc-in [:raw_response :prose_summary]
-                    (:raw_response synthesis-result)))
+      (let [summarized (-> combined
+                           (assoc :reasoning (str (outcome-summary summary)
+                                                  "\n\nReview summary:\n"
+                                                  reasoning))
+                           (assoc-in [:raw_response :prose_summary]
+                                     (:raw_response synthesis-result))
+                           (assoc-in [:raw_response :prose_summary_version]
+                                     prose-summary-version))]
+        (if-let [details (batch-review-details results)]
+          (assoc-in summarized [:raw_response :batch_review_details] details)
+          summarized))
       combined)))
 
 (defn normalize-batched-result
@@ -874,21 +926,22 @@
 (defmulti complete dispatch-provider)
 
 (defmethod complete :default
-  [_sys provider-cfg _prompt]
+  [_sys provider-cfg _options _prompt]
   (throw (ex-info (str "Unsupported verification provider: " (:provider provider-cfg))
                   {:type :alida.verify/unsupported-provider
                    :provider (:provider provider-cfg)})))
 
 (defn complete-with-retries
   ([sys provider-cfg prompt]
+   (complete-with-retries sys
+                          provider-cfg
+                          {:system-prompt system-prompt}
+                          prompt))
+  ([sys provider-cfg options prompt]
    (retry/with-retries sys
                        (merge {:max_retries default-max-retries
                                :retry_initial_ms default-retry-initial-ms
                                :retry_jitter_ms default-retry-jitter-ms
                                :operation "verification-provider"}
                               provider-cfg)
-                       #(complete sys provider-cfg prompt)))
-  ([sys provider-cfg custom-system-prompt prompt]
-   (complete-with-retries sys
-                          (assoc provider-cfg ::system-prompt custom-system-prompt)
-                          prompt)))
+                       #(complete sys provider-cfg options prompt))))

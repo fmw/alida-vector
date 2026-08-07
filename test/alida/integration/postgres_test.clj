@@ -70,7 +70,7 @@
                   :indexes [index]}})
 
 (defn- passing-verification
-  [_sys _provider-cfg _prompt]
+  [_sys _provider-cfg _options _prompt]
   {:verdict "pass"
    :reasoning "Fixture verification passed"
    :findings []

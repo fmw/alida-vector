@@ -435,6 +435,8 @@
                      (map deterministic-finding-line
                           (:deterministic_findings deterministic_verification)))
             (llm-verification-section summary verification)
+            (when-let [details (get-in verification [:raw_response :batch_review_details])]
+              (str "LLM Batch Review Details\n" details))
             (section "LLM Security Findings"
                      (map finding-line (:llm_security_findings verification)))
             (str/join

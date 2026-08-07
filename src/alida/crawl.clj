@@ -589,8 +589,8 @@
 
 (defn- maybe-synthesize-prose!
   [sys verification-cfg run results combined]
-  (if (or (contains? (:raw_response combined) :prose_summary)
-          (not (verify/prose-synthesis-needed? results)))
+  (if (or (verify/prose-summary-current? combined)
+          (not (verify/prose-synthesis-needed? combined results)))
     combined
     (do
       (wait-between-verification-prompts! sys verification-cfg)
@@ -603,10 +603,10 @@
               (verify/complete-with-retries
                sys
                verification-cfg
-               verify/prose-summary-system-prompt
+               {:system-prompt verify/prose-summary-system-prompt}
                (verify/build-prose-summary-prompt results))
               synthesized (verify/apply-prose-summary combined results synthesis-result)
-              accepted? (contains? (:raw_response synthesized) :prose_summary)]
+              accepted? (verify/prose-summary-current? synthesized)]
           (u/log ::verification-prose-summary-complete
                  :index-name (:index_name run)
                  :run-id (:id run)
@@ -622,7 +622,7 @@
 
 (defn- maybe-synthesize-cached-prose!
   [sys verification-cfg run result]
-  (if (contains? (:raw_response result) :prose_summary)
+  (if (verify/prose-summary-current? result)
     result
     (try
       (if-let [raw-batches (seq (get-in result [:raw_response :batches]))]
@@ -657,10 +657,12 @@
   [sys ds verification-cfg run prompts]
   (let [verification-input-hash (verify/verification-input-hash verification-cfg prompts)]
     (if-let [cached (attestation/find-result ds verification-cfg verification-input-hash)]
-      (let [cached (update cached
-                           :llm-result
-                           #(maybe-synthesize-cached-prose!
-                             sys verification-cfg run %))]
+      (let [cached (if (= "cache" (:source cached))
+                     (update cached
+                             :llm-result
+                             #(maybe-synthesize-cached-prose!
+                               sys verification-cfg run %))
+                     cached)]
         (u/log ::verification-attestation-reused
                :index-name (:index_name run)
                :run-id (:id run)

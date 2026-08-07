@@ -541,16 +541,30 @@
                                 :batches [{:reasoning "Malformed but already normalized."}]}}]
     (is (= current (verify/normalize-batched-result current)))))
 
-(deftest prose-synthesis-is-limited-to-multiple-distinct-review-reasons
-  (is (false? (verify/prose-synthesis-needed?
-               [{:verdict "pass" :reasoning "Fine."}
-                {:verdict "caution" :reasoning "Review links."}])))
-  (is (false? (verify/prose-synthesis-needed?
-               [{:verdict "caution" :reasoning "Review links."}
-                {:verdict "caution" :reasoning " Review links. "}])))
-  (is (true? (verify/prose-synthesis-needed?
-              [{:verdict "caution" :reasoning "Review links."}
-               {:verdict "fail" :reasoning "A credential is exposed."}]))))
+(deftest prose-synthesis-requires-three-distinct-consistent-review-reasons
+  (let [one-reason [{:verdict "pass" :reasoning "Fine."}
+                    {:verdict "caution" :reasoning "Review links."}]
+        duplicate-reasons [{:verdict "caution" :reasoning "Review links."}
+                           {:verdict "caution" :reasoning " Review links. "}]
+        two-reasons [{:verdict "caution" :reasoning "Review links."}
+                     {:verdict "fail" :reasoning "A credential is exposed."}]
+        three-reasons [{:verdict "caution" :reasoning "Review links."}
+                       {:verdict "caution" :reasoning "Review redirects."}
+                       {:verdict "fail" :reasoning "A credential is exposed."}]
+        combined (verify/combine-batch-results three-reasons)
+        database-shaped
+        (update-in combined
+                   [:raw_response :summary :verdict_counts]
+                   #(into {} (map (fn [[verdict n]] [(keyword verdict) n]) %)))]
+    (doseq [results [one-reason duplicate-reasons two-reasons]]
+      (is (false? (verify/prose-synthesis-needed?
+                   (verify/combine-batch-results results)
+                   results))))
+    (is (true? (verify/prose-synthesis-needed? combined three-reasons)))
+    (is (true? (verify/prose-synthesis-needed? database-shaped three-reasons)))
+    (is (false? (verify/prose-synthesis-needed?
+                 (assoc combined :verdict "pass")
+                 three-reasons)))))
 
 (deftest prose-summary-prompt-contains-only-review-batches
   (let [prompt (verify/build-prose-summary-prompt
@@ -594,10 +608,24 @@
     (is (= (:security_findings combined) (:security_findings summarized)))
     (is (= (:raw_response synthesis)
            (get-in summarized [:raw_response :prose_summary])))
+    (is (= verify/prose-summary-version
+           (get-in summarized [:raw_response :prose_summary_version])))
+    (is (= (str "Review reasons:\n"
+                "- Batch 1 (caution): Review redirect A.\n"
+                "- Batch 2 (caution): Redirect B looks unexpected.")
+           (get-in summarized [:raw_response :batch_review_details])))
+    (is (verify/prose-summary-current? summarized))
+    (is (false? (verify/prose-summary-current?
+                 (update summarized :raw_response dissoc :prose_summary_version))))
     (is (= combined
            (verify/apply-prose-summary combined
                                        results
-                                       (assoc synthesis :verdict "fail"))))))
+                                       (assoc synthesis :verdict "fail"))))
+    (let [divergent (assoc combined :verdict "fail")]
+      (is (= divergent
+             (verify/apply-prose-summary divergent
+                                         results
+                                         (assoc synthesis :verdict "fail")))))))
 
 (deftest combine-batch-results-requires-at-least-one-result
   (is (thrown-with-msg? clojure.lang.ExceptionInfo
@@ -679,6 +707,7 @@
                                 {:provider "openai"
                                  :api_key "test-key"
                                  :model "gpt-4.1-mini"}
+                                {}
                                 "verify this")]
     (is (= "pass" (:verdict result)))
     (is (= "https://api.openai.com/v1/chat/completions" (:url (first @requests))))
@@ -707,7 +736,7 @@
      {:provider "openai"
       :api_key "test-key"
       :model "gpt-4.1-mini"}
-     verify/prose-summary-system-prompt
+     {:system-prompt verify/prose-summary-system-prompt}
      "summarize this")
     (let [body (json/read-str (:body (first @requests)) :key-fn keyword)]
       (is (= verify/prose-summary-system-prompt
@@ -734,6 +763,7 @@
                       :max_completion_tokens 512
                       :reasoning_effort "low"
                       :verbosity "low"}
+                     {}
                      "verify this")
     (let [body (json/read-str (:body (first @requests)) :key-fn keyword)]
       (is (= {:top_p 0.25
@@ -765,6 +795,7 @@
                                  :deployment_name "gpt deployment"
                                  :api_version "2024-02-01"
                                  :api_key "test-key"}
+                                {}
                                 "verify this")]
     (is (= "pass" (:verdict result)))
     (is (= "https://example.openai.azure.com/openai/deployments/gpt%20deployment/chat/completions?api-version=2024-02-01"
@@ -796,6 +827,7 @@
                       :max_completion_tokens 512
                       :reasoning_effort "low"
                       :verbosity "low"}
+                     {}
                      "verify this")
     (let [body (json/read-str (:body (first @requests)) :key-fn keyword)]
       (is (= {:temperature 1.0
@@ -826,6 +858,7 @@
                                  :location "europe-west4"
                                  :model "gemini-2.5-flash-lite"
                                  :access_token "vertex-token"}
+                                {}
                                 "verify this")]
     (is (= "pass" (:verdict result)))
     (is (= "https://europe-west4-aiplatform.googleapis.com/v1/projects/alida-project/locations/europe-west4/publishers/google/models/gemini-2.5-flash-lite:generateContent"

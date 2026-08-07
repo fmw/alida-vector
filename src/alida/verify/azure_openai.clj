@@ -32,7 +32,7 @@
                        :response response}))))
 
 (defmethod verify/complete :azure-openai
-  [sys provider-cfg prompt]
+  [sys provider-cfg {:keys [system-prompt]} prompt]
   (let [api-key (verify/require-config! provider-cfg :api_key)
         response (verify/request-json!
                   sys
@@ -45,7 +45,7 @@
                            (verify/chat-completion-parameters provider-cfg)
                            {:response_format {:type "json_object"}
                             :messages [{:role "system"
-                                        :content (verify/completion-system-prompt provider-cfg)}
+                                        :content (or system-prompt verify/system-prompt)}
                                        {:role "user"
                                         :content prompt}]}))})]
     (verify/parse-structured-verdict (response-content response))))
