@@ -507,7 +507,7 @@
         curated-finding {:type "curated-finding"}
         curated-security-finding {:type "curated-security-finding"}
         normalized (verify/normalize-batched-result
-                    {:verdict "fail"
+                    {:verdict "caution"
                      :reasoning "First batch passed.\n\nReview this batch."
                      :findings [curated-finding]
                      :security_findings [curated-security-finding]
@@ -517,12 +517,21 @@
                 "\n\nReview reason:"
                 "\n- Batch 2 (caution): Review this batch.")
            (:reasoning normalized)))
-    (is (= "fail" (:verdict normalized)))
+    (is (= "caution" (:verdict normalized)))
     (is (= [curated-finding] (:findings normalized)))
     (is (= [curated-security-finding] (:security_findings normalized)))
     (is (= "request-1"
            (get-in normalized [:raw_response :provider_request_id])))
     (is (= raw-batches (get-in normalized [:raw_response :batches])))))
+
+(deftest normalize-cached-batch-results-skips-divergent-raw-verdicts
+  (let [cached {:verdict "fail"
+                :reasoning "Attested failure."
+                :findings [{:type "curated"}]
+                :security_findings []
+                :raw_response {:batches [{:verdict "pass" :reasoning "Looks fine."}
+                                          {:verdict "pass" :reasoning "Still fine."}]}}]
+    (is (= cached (verify/normalize-batched-result cached)))))
 
 (deftest normalize-cached-batch-results-tolerates-malformed-raw-batches
   (let [cached {:verdict "pass"
@@ -566,7 +575,7 @@
                  (assoc combined :verdict "pass")
                  three-reasons)))))
 
-(deftest prose-summary-prompt-contains-only-review-batches
+(deftest prose-summary-prompt-contains-only-review-groups
   (let [prompt (verify/build-prose-summary-prompt
                 [{:verdict "pass" :reasoning "No concerns."}
                  {:verdict "caution"
@@ -574,13 +583,35 @@
                   :findings [{:url "https://example.test/redirect"}]}])
         input (json/read-str (last (str/split prompt #"\n\n")) :key-fn keyword)]
     (is (= "caution" (:authoritative_verdict input)))
-    (is (= [{:batch_number 2
+    (is (= [{:batch_numbers [2]
              :verdict "caution"
              :reasoning "Review the redirect."
              :findings [{:url "https://example.test/redirect"}]
              :security_findings []}]
-           (:review_batches input)))
+           (:review_groups input)))
     (is (str/includes? prompt "Do not include the verdict tally"))))
+
+(deftest prose-summary-prompt-groups-duplicate-reasons-without-losing-findings
+  (let [results (vec
+                 (concat
+                  [{:verdict "pass" :reasoning "No concerns."}]
+                  (for [batch-number (range 2 12)]
+                    {:verdict "caution"
+                     :reasoning " Review the redirect. "
+                     :findings [{:resource (str "page-" batch-number)}]})
+                  [{:verdict "caution"
+                    :reasoning "Review missing metadata."
+                    :security_findings [{:type "metadata"}]}
+                   {:verdict "fail"
+                    :reasoning "A credential is exposed."
+                    :findings [{:type "credential"}]}]))
+        prompt (verify/build-prose-summary-prompt results)
+        input (json/read-str (last (str/split prompt #"\n\n")) :key-fn keyword)
+        groups (:review_groups input)]
+    (is (= 3 (count groups)))
+    (is (= (vec (range 2 12)) (:batch_numbers (first groups))))
+    (is (= 10 (count (:findings (first groups)))))
+    (is (= "Review the redirect." (:reasoning (first groups))))))
 
 (deftest prose-summary-cannot-change-authoritative-result-data
   (let [results [{:verdict "caution"
@@ -617,6 +648,7 @@
     (is (verify/prose-summary-current? summarized))
     (is (false? (verify/prose-summary-current?
                  (update summarized :raw_response dissoc :prose_summary_version))))
+    (is (false? (verify/prose-summary-current? {:raw_response "opaque"})))
     (is (= combined
            (verify/apply-prose-summary combined
                                        results

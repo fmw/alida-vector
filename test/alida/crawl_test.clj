@@ -641,6 +641,29 @@
         (is (not (contains? (get-in resolved [:llm-result :raw_response])
                             :prose_summary)))))))
 
+(deftest local-cache-reuse-tolerates-an-opaque-raw-response
+  (let [cached {:llm-result {:verdict "pass"
+                             :reasoning "Attested pass."
+                             :findings []
+                             :security_findings []
+                             :raw_response "opaque"}
+                :source "cache"
+                :attestor "candidate"}]
+    (with-redefs [verify/verification-input-hash (constantly "input-hash")
+                  attestation/find-result (constantly cached)
+                  verify/complete-with-retries
+                  (fn [& _]
+                    (throw (ex-info "cache reuse must not call the provider" {})))]
+      (let [resolved (#'crawl/resolve-llm-verification!
+                      {}
+                      :datasource
+                      {}
+                      {:id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+                       :index_name "docs"}
+                      ["prompt"])]
+        (is (= cached (dissoc resolved :verification-input-hash)))
+        (is (= "input-hash" (:verification-input-hash resolved)))))))
+
 (deftest verification-documents-forwards-changed-and-added-page-content
   ;; Regression: the in-memory document map has no :source_id (only attached at
   ;; persist time), while the diff entries do. verification-documents must stamp
