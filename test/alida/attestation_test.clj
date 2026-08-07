@@ -1,6 +1,7 @@
 (ns alida.attestation-test
   (:require [alida.attestation :as attestation]
             [alida.db.postgres :as db]
+            [alida.verify :as verify]
             [clojure.test :refer [deftest is]]))
 
 (def cached-record
@@ -11,6 +12,16 @@
    :llm_findings [{:type "consistent"}]
    :llm_security_findings []
    :raw_response {:verdict "pass"}})
+
+(deftest attested-verdicts-are-normalized-and-validated-on-read
+  (let [result (#'attestation/attestation->llm-result
+                (assoc cached-record :llm_verdict "FAIL"))]
+    (is (= "fail" (:verdict result)))
+    (is (= "fail" (verify/strictest-verdict (:verdict result) "pass"))))
+  (is (thrown-with-msg? clojure.lang.ExceptionInfo
+                        #"Invalid verification verdict"
+                        (#'attestation/attestation->llm-result
+                         (assoc cached-record :llm_verdict "unknown")))))
 
 (deftest trusted-attestations-take-precedence-over-the-local-cache
   (let [opened-config (atom nil)
@@ -63,6 +74,27 @@
              (:source (attestation/find-result :local-ds
                                                verification-cfg
                                                "input-hash")))))))
+
+(deftest cached-batch-reasoning-is-normalized-for-current-reports
+  (let [raw-batches [{:verdict "pass" :reasoning "Batch one passed."}
+                     {:verdict "caution" :reasoning "Review batch two."}]
+        verification-cfg {:attestations {:attestor "candidate"}}]
+    (with-redefs [db/find-verification-attestation
+                  (fn [& _]
+                    (assoc cached-record
+                           :attestor "candidate"
+                           :llm_verdict "caution"
+                           :reasoning "Batch one passed.\n\nReview batch two."
+                           :raw_response {:batches raw-batches}))]
+      (let [result (:llm-result
+                    (attestation/find-result :local-ds
+                                             verification-cfg
+                                             "input-hash"))]
+        (is (= (str "2 verification batches reviewed: 1 passed; 1 flagged for review."
+                    "\n\nReview reason:"
+                    "\n- Batch 2 (caution): Review batch two.")
+               (:reasoning result)))
+        (is (= raw-batches (get-in result [:raw_response :batches])))))))
 
 (deftest provider-results-are-saved-as-local-attestations
   (let [saved (atom nil)

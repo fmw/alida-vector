@@ -51,7 +51,7 @@
                        :response response}))))
 
 (defmethod verify/complete :vertex-ai
-  [sys provider-cfg prompt]
+  [sys provider-cfg {:keys [system-prompt]} prompt]
   (let [response (verify/request-json!
                   sys
                   {:method :post
@@ -60,7 +60,7 @@
                              "Content-Type" "application/json"}
                    :body (json/write-str
                           {:systemInstruction
-                           {:parts [{:text verify/system-prompt}]}
+                           {:parts [{:text (or system-prompt verify/system-prompt)}]}
                            :contents [{:role "user"
                                        :parts [{:text prompt}]}]
                            :generationConfig

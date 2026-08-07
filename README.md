@@ -62,6 +62,13 @@ Scraping data from external sources often introduces subtle problems: pages disa
 
 Alida Vector uses an LLM verification step to validate scraped data before a candidate index is promoted to the live index. The goal is to automate routine refreshes while catching obvious crawl, extraction, or indexing problems before users are exposed to bad data.
 
+Large verification inputs are split into batches. A single batch keeps its
+original reasoning, while multi-batch runs show a concise verdict tally and only
+the reasons that require review. When several distinct review reasons need
+semantic grouping, Alida makes one presentation-only synthesis call. That call
+cannot change the verdict or findings, and a failed synthesis falls back to the
+deterministic report.
+
 ## Running it
 
 Alida Vector is designed to run as a scheduled job, such as a Docker container running on Kubernetes.

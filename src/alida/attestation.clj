@@ -22,11 +22,12 @@
 
 (defn- attestation->llm-result
   [{:keys [llm_verdict reasoning llm_findings llm_security_findings raw_response]}]
-  {:verdict llm_verdict
-   :reasoning (or reasoning "")
-   :findings (vec (or llm_findings []))
-   :security_findings (vec (or llm_security_findings []))
-   :raw_response (or raw_response {})})
+  (verify/normalize-batched-result
+   {:verdict (verify/require-verdict! llm_verdict)
+    :reasoning (or reasoning "")
+    :findings (vec (or llm_findings []))
+    :security_findings (vec (or llm_security_findings []))
+    :raw_response (or raw_response {})}))
 
 (defn- trusted-attestation
   [source verification-input-hash]

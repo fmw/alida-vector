@@ -17,6 +17,21 @@
   [summary]
   (or (get-in summary [:verification :llm_verdict]) "-"))
 
+(defn- llm-batch-count
+  [verification]
+  (let [batch-count (get-in verification [:raw_response :summary :batch_count])]
+    (when (< 1 (or batch-count 0))
+      batch-count)))
+
+(defn- llm-verification-section
+  [summary verification]
+  (let [batch-count (llm-batch-count verification)]
+    (str/join \newline
+              (concat ["LLM Verification"
+                       (str "verdict: " (llm-verdict summary))]
+                      (when batch-count [(str "batches: " batch-count)])
+                      [(str "reasoning: " (or (:reasoning verification) "-"))]))))
+
 (defn- diff-count
   [summary k]
   (get-in summary [:diff :summary k] 0))
@@ -419,11 +434,9 @@
             (section "Deterministic Findings"
                      (map deterministic-finding-line
                           (:deterministic_findings deterministic_verification)))
-            (str/join
-             \newline
-             ["LLM Verification"
-              (str "verdict: " (llm-verdict summary))
-              (str "reasoning: " (or (:reasoning verification) "-"))])
+            (llm-verification-section summary verification)
+            (when-let [details (get-in verification [:raw_response :batch_review_details])]
+              (str "LLM Batch Review Details\n" details))
             (section "LLM Security Findings"
                      (map finding-line (:llm_security_findings verification)))
             (str/join

@@ -174,3 +174,58 @@
     (is (str/includes? full-report "Timings"))
     (is (str/includes? full-report "Embedding"))
     (is (str/includes? full-report "- website (website): documents=2"))))
+
+(deftest full-report-makes-llm-batching-explicit
+  (let [reasoning (str "3 verification batches reviewed: 2 passed; 1 flagged for review."
+                       "\n\nReview reason:"
+                       "\n- Batch 3 (caution): Review an unexpected redirect.")
+        full-report (:full_report
+                     (report/build
+                      (assoc summary
+                             :verification_verdict "caution"
+                             :verification
+                             {:llm_verdict "caution"
+                              :reasoning reasoning
+                              :raw_response
+                              {:summary {:batch_count 3
+                                         :verdict_counts
+                                         {"pass" 2 "caution" 1 "fail" 0}}}})))]
+    (is (str/includes? full-report "LLM Verification\nverdict: caution\nbatches: 3"))
+    (is (= 1 (count (re-seq #"Review an unexpected redirect" full-report))))))
+
+(deftest full-report-retains-batch-details-below-synthesized-prose
+  (let [built (report/build
+               (assoc summary
+                      :verification_verdict "caution"
+                      :verification
+                      {:llm_verdict "caution"
+                       :reasoning (str "3 verification batches reviewed: "
+                                       "3 flagged for review.\n\n"
+                                       "Review summary:\nThree pages require review.")
+                       :raw_response
+                       {:summary {:batch_count 3}
+                        :batch_review_details
+                        (str "Review reasons:\n"
+                             "- Batch 1 (caution): Review redirect A.\n"
+                             "- Batch 2 (caution): Review redirect B.\n"
+                             "- Batch 3 (caution): Review missing title C.")}}))
+        full-report (:full_report built)
+        slack-text (str/join "\n" (keep #(get-in % [:text :text])
+                                         (:slack_blocks built)))]
+    (is (str/includes? full-report
+                       "LLM Batch Review Details\nReview reasons:"))
+    (is (str/includes? full-report "Review redirect A."))
+    (is (str/includes? full-report "Review missing title C."))
+    (is (not (str/includes? slack-text "Review redirect A.")))))
+
+(deftest full-report-omits-batch-count-for-the-common-single-batch-case
+  (let [full-report (:full_report
+                     (report/build
+                      (assoc summary
+                             :verification_verdict "pass"
+                             :verification
+                             {:llm_verdict "pass"
+                              :reasoning "No concerns."
+                              :raw_response {:summary {:batch_count 1}}})))]
+    (is (str/includes? full-report "LLM Verification\nverdict: pass\nreasoning: No concerns."))
+    (is (not (str/includes? full-report "batches: 1")))))
