@@ -212,11 +212,11 @@
 (defn- browser-args
   [source-cfg]
   (vec (concat default-browser-args
-               ;; RuntimeDefault seccomp plus no privilege escalation prevents
-               ;; Chromium's namespace and setuid sandboxes from starting in
-               ;; the container image. The image opts out explicitly and relies
-               ;; on its non-root container boundary instead; non-container
-               ;; launches retain Chromium's sandbox by default.
+               ;; Chromium's namespace and setuid sandboxes cannot start in this
+               ;; non-root image under either Docker's default runtime profile
+               ;; or the supplied hardened Kubernetes profile. The image opts
+               ;; out explicitly and relies on its container boundary instead;
+               ;; non-container launches retain Chromium's sandbox by default.
                (when (browser-sandbox-disabled?) ["--no-sandbox"])
                (:browser_args source-cfg))))
 
