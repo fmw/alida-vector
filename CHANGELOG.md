@@ -13,8 +13,6 @@
   read-only-root container deployments.
 - Refresh the Debian and Chromium runtime, jsoup, and container publishing
   dependencies for their current security fixes.
-- Build published containers without cached package-install layers so available
-  operating-system security updates are always included.
 
 ## 0.1.3 - 2026-07-29
 
