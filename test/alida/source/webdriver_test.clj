@@ -44,16 +44,6 @@
       #(is (some #{"--no-sandbox"}
                  (browser-args {:browser_args ["--no-sandbox"]}))))))
 
-(deftest chromium-runtime-directories-are-writable-and-isolated
-  (let [first-driver (#'webdriver/runtime-directory-args)
-        second-driver (#'webdriver/runtime-directory-args)]
-    (doseq [args [first-driver second-driver]]
-      (is (some #(re-matches #"--disk-cache-dir=/tmp/alida-vector/chrome-cache-\d+" %)
-                args))
-      (is (some #(re-matches #"--user-data-dir=/tmp/alida-vector/chrome-profile-\d+" %)
-                args)))
-    (is (not= first-driver second-driver))))
-
 (deftest discovers-rendered-pages-and-follows-allowed-links
   (let [visited (atom [])
         quit? (atom false)]

@@ -16,7 +16,6 @@ ENV ALIDA_VECTOR_HOME=/opt/alida-vector \
     ALIDA_CHROME_NO_SANDBOX=true \
     CHROME_BIN=/usr/bin/chromium \
     CHROMEDRIVER_BIN=/usr/bin/chromedriver \
-    HOME=/tmp/alida-vector \
     JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75.0
 
 RUN apt-get update \
@@ -30,12 +29,15 @@ RUN apt-get update \
     && rm -rf /var/lib/apt/lists/*
 
 RUN groupadd --gid 10001 alida \
-    && useradd --uid 10001 --gid alida --home-dir "$ALIDA_VECTOR_HOME" \
-      --create-home --shell /usr/sbin/nologin alida \
-    && mkdir -p /config /var/cache/alida-vector /tmp/alida-vector \
+    && useradd --uid 10001 --gid alida --home-dir /tmp/alida-vector \
+      --no-create-home --shell /usr/sbin/nologin alida \
+    && mkdir -p "$ALIDA_VECTOR_HOME" /config /var/cache/alida-vector /tmp/alida-vector \
     && chown -R alida:alida "$ALIDA_VECTOR_HOME" /config /var/cache/alida-vector /tmp/alida-vector
 
-ENV TMPDIR=/tmp/alida-vector
+# Set these only after the directory exists so image-build commands keep their
+# normal root home and temporary directory.
+ENV HOME=/tmp/alida-vector \
+    TMPDIR=/tmp/alida-vector
 
 COPY --chmod=0755 bin/alida-vector /usr/local/bin/alida-vector
 COPY --from=builder --chown=alida:alida /workspace/target/alida-vector.jar /opt/alida-vector/alida-vector.jar

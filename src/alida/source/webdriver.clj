@@ -58,18 +58,6 @@
    "--disk-cache-size=104857600"
    "--window-size=1920,1080"])
 
-(def ^:private driver-counter (java.util.concurrent.atomic.AtomicLong. 0))
-
-(defn- runtime-directory-args
-  "Chrome does not support multiple concurrent instances sharing one profile or
-   disk cache directory, and the parallel crawl runs several browsers at once.
-   Keep both beneath the image's explicitly writable runtime directory and give
-   every driver its own paths."
-  []
-  (let [driver-id (.incrementAndGet driver-counter)]
-    [(str "--disk-cache-dir=/tmp/alida-vector/chrome-cache-" driver-id)
-     (str "--user-data-dir=/tmp/alida-vector/chrome-profile-" driver-id)]))
-
 (def cleanup-script
   ;; Generic, site-agnostic cleanup. The live DOM is read but never mutated:
   ;; selector removal and description prepending happen on a detached clone of
@@ -226,9 +214,9 @@
   (vec (concat default-browser-args
                ;; RuntimeDefault seccomp plus no privilege escalation prevents
                ;; Chromium's namespace and setuid sandboxes from starting in
-               ;; the hardened image. The image opts out explicitly and relies
-               ;; on its non-root, capability-free container boundary instead;
-               ;; non-container launches retain Chromium's sandbox by default.
+               ;; the container image. The image opts out explicitly and relies
+               ;; on its non-root container boundary instead; non-container
+               ;; launches retain Chromium's sandbox by default.
                (when (browser-sandbox-disabled?) ["--no-sandbox"])
                (:browser_args source-cfg))))
 
@@ -296,7 +284,7 @@
 
 (defn- driver-options
   [source-cfg]
-  (cond-> {:args (into (browser-args source-cfg) (runtime-directory-args))
+  (cond-> {:args (browser-args source-cfg)
            :capabilities {:pageLoadStrategy "eager"
                           :goog:chromeOptions
                           {:prefs {"profile.default_content_setting_values" {"images" 2}
