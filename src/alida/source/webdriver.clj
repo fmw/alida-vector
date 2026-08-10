@@ -34,7 +34,6 @@
   ["--headless=new"
    (str "--user-agent=Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
         "(KHTML, like Gecko) Chrome/146.0.0.0 Safari/537.36")
-   "--no-sandbox"
    "--disable-dev-shm-usage"
    "--disable-gpu"
    "--disable-blink-features=AutomationControlled"
@@ -61,12 +60,15 @@
 
 (def ^:private driver-counter (java.util.concurrent.atomic.AtomicLong. 0))
 
-(defn- disk-cache-arg
-  "Chrome does not support multiple concurrent instances sharing one disk cache
-   directory, and the parallel crawl runs several browsers at once. Give every
-   driver its own directory."
+(defn- runtime-directory-args
+  "Chrome does not support multiple concurrent instances sharing one profile or
+   disk cache directory, and the parallel crawl runs several browsers at once.
+   Keep both beneath the image's explicitly writable runtime directory and give
+   every driver its own paths."
   []
-  (str "--disk-cache-dir=/tmp/alida-vector/chrome-cache-" (.incrementAndGet driver-counter)))
+  (let [driver-id (.incrementAndGet driver-counter)]
+    [(str "--disk-cache-dir=/tmp/alida-vector/chrome-cache-" driver-id)
+     (str "--user-data-dir=/tmp/alida-vector/chrome-profile-" driver-id)]))
 
 (def cleanup-script
   ;; Generic, site-agnostic cleanup. The live DOM is read but never mutated:
@@ -206,6 +208,13 @@
   (or (seq (:content_wait_selectors source-cfg))
       (:content-wait-selectors (profile source-cfg))))
 
+(defn- browser-sandbox-disabled?
+  []
+  (contains? #{"1" "true" "yes"}
+             (some-> (System/getenv "ALIDA_CHROME_NO_SANDBOX")
+                     str/trim
+                     str/lower-case)))
+
 (defn- remove-selectors
   [source-cfg]
   (vec (concat ["script" "style"]
@@ -214,7 +223,14 @@
 
 (defn- browser-args
   [source-cfg]
-  (vec (concat default-browser-args (:browser_args source-cfg))))
+  (vec (concat default-browser-args
+               ;; RuntimeDefault seccomp plus no privilege escalation prevents
+               ;; Chromium's namespace and setuid sandboxes from starting in
+               ;; the hardened image. The image opts out explicitly and relies
+               ;; on its non-root, capability-free container boundary instead;
+               ;; non-container launches retain Chromium's sandbox by default.
+               (when (browser-sandbox-disabled?) ["--no-sandbox"])
+               (:browser_args source-cfg))))
 
 (defn- browser-restart-after-pages
   [source-cfg]
@@ -280,7 +296,7 @@
 
 (defn- driver-options
   [source-cfg]
-  (cond-> {:args (conj (browser-args source-cfg) (disk-cache-arg))
+  (cond-> {:args (into (browser-args source-cfg) (runtime-directory-args))
            :capabilities {:pageLoadStrategy "eager"
                           :goog:chromeOptions
                           {:prefs {"profile.default_content_setting_values" {"images" 2}

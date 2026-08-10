@@ -13,8 +13,10 @@ FROM debian:trixie-slim@sha256:3a39a0592364683e6bab97937b72cad5a8fa6dcbbee90edb3
 
 ENV ALIDA_VECTOR_HOME=/opt/alida-vector \
     ALIDA_VECTOR_JAR=/opt/alida-vector/alida-vector.jar \
+    ALIDA_CHROME_NO_SANDBOX=true \
     CHROME_BIN=/usr/bin/chromium \
     CHROMEDRIVER_BIN=/usr/bin/chromedriver \
+    HOME=/tmp/alida-vector \
     JAVA_TOOL_OPTIONS=-XX:MaxRAMPercentage=75.0
 
 RUN apt-get update \
@@ -32,6 +34,8 @@ RUN groupadd --gid 10001 alida \
       --create-home --shell /usr/sbin/nologin alida \
     && mkdir -p /config /var/cache/alida-vector /tmp/alida-vector \
     && chown -R alida:alida "$ALIDA_VECTOR_HOME" /config /var/cache/alida-vector /tmp/alida-vector
+
+ENV TMPDIR=/tmp/alida-vector
 
 COPY --chmod=0755 bin/alida-vector /usr/local/bin/alida-vector
 COPY --from=builder --chown=alida:alida /workspace/target/alida-vector.jar /opt/alida-vector/alida-vector.jar
