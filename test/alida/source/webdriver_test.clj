@@ -34,6 +34,16 @@
     (is (not (navigable? source-cfg "https://example.test/portal/secret")))
     (is (not (navigable? source-cfg nil)))))
 
+(deftest chromium-sandbox-is-disabled-only-when-explicitly-configured
+  (let [browser-args #'webdriver/browser-args]
+    (with-redefs-fn {#'webdriver/browser-sandbox-disabled? (constantly false)}
+      #(is (not (some #{"--no-sandbox"} (browser-args {})))))
+    (with-redefs-fn {#'webdriver/browser-sandbox-disabled? (constantly true)}
+      #(is (some #{"--no-sandbox"} (browser-args {}))))
+    (with-redefs-fn {#'webdriver/browser-sandbox-disabled? (constantly false)}
+      #(is (some #{"--no-sandbox"}
+                 (browser-args {:browser_args ["--no-sandbox"]}))))))
+
 (deftest discovers-rendered-pages-and-follows-allowed-links
   (let [visited (atom [])
         quit? (atom false)]

@@ -8,6 +8,10 @@ fi
 
 jar_path="${ALIDA_VECTOR_JAR:-$(dirname "$0")/../target/alida-vector.jar}"
 
+# A Kubernetes emptyDir mounted at /tmp hides the directory created in the
+# image. Recreate it before ChromeDriver or the JVM attempts to make temp files.
+mkdir -p "${TMPDIR:-/tmp}"
+
 # JAVA_OPTS lets callers cap the heap (the crawl holds a run's documents, chunks,
 # and embedding vectors in memory). The container sets a sane container-aware
 # default; JAVA_TOOL_OPTIONS is also honored by the JVM automatically.

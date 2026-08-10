@@ -45,6 +45,11 @@ docker run --rm -v "$PWD/config:/config:ro" alida-vector:local crawl --config /c
 
 Mount a config file or directory at `/config`. The image also creates writable
 `/var/cache/alida-vector` and `/tmp/alida-vector` directories for runtime use.
+The image points `HOME` and `TMPDIR` there, and its entrypoint recreates the
+directory when a `/tmp` mount hides the image contents. ChromeDriver keeps each
+session's temporary profile and cache below that directory and removes them when
+the browser quits. Mount `/tmp/alida-vector` (or its `/tmp` parent) as writable
+when the root filesystem is read-only.
 
 ## Runtime Environment
 
@@ -67,6 +72,14 @@ Container-specific environment variables:
 
 - `ALIDA_VECTOR_JAR`: path to the jar used by the wrapper. Defaults to `/opt/alida-vector/alida-vector.jar` in the image.
 - `JAVA_TOOL_OPTIONS`: JVM options, such as heap limits.
+- `TMPDIR`: temporary-file directory. The image sets this to
+  `/tmp/alida-vector` so Chromium and ChromeDriver stay inside the writable
+  runtime directory.
+- `ALIDA_CHROME_NO_SANDBOX`: explicitly disables Chromium's process sandbox
+  when set to `true`. The supplied image sets this because its non-root
+  container execution prevents Chromium's namespace and setuid sandboxes from
+  starting, including under a default `docker run`. Set it to `false` only when
+  the runtime supports Chromium's sandbox.
 - `CHROME_BIN`: Chromium binary path.
 - `CHROMEDRIVER_BIN`: Chromedriver binary path.
 
