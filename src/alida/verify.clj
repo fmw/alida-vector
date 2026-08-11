@@ -76,7 +76,12 @@
        "that validation passed. For a changed document, content_changes lists bounded text segments "
        "found only in the previous or current extracted content; use those segments as the primary "
        "evidence for the summary instead of describing the whole current document. Do not invent "
-       "before-and-after details that are absent from the supplied data. When the verdict is caution "
+       "before-and-after details that are absent from the supplied data. content_changes_omitted "
+       "means that the evidence could not fit safely in the prompt, so summarize only what the "
+       "current content and diff support. content_changes_continuation means that another fragment "
+       "already carries the evidence; do not independently summarize the continuation as another "
+       "document change. "
+       "When the verdict is caution "
        "or fail, use reasoning to explain what requires review. Keep reasoning under 120 words. "
        "Return only JSON with keys verdict, reasoning, findings, and security_findings. "
        "The verdict must be pass, caution, or fail."))
@@ -385,9 +390,36 @@
                                         :batch batch
                                         :diff_batch diff-batch))))
 
+(defn- change-evidence?
+  [document]
+  (or (contains? document :content_changes)
+      (contains? document :content_changes_omitted)))
+
 (defn- with-chunks
-  [document chunks]
-  (assoc document :chunks (vec chunks)))
+  ([document chunks]
+   (with-chunks document chunks true))
+  ([document chunks include-change-evidence?]
+   (let [has-change-evidence? (change-evidence? document)]
+     (cond-> (assoc document :chunks (vec chunks))
+       (and has-change-evidence? (not include-change-evidence?))
+       (dissoc :content_changes :content_changes_omitted)
+
+       (and has-change-evidence? (not include-change-evidence?))
+       (assoc :content_changes_continuation true)))))
+
+(defn- fit-content-changes
+  [input document max-tokens]
+  (if (and (contains? document :content_changes)
+           (seq (:chunks document))
+           (< max-tokens
+              (prompt-token-estimate input
+                                     [(with-chunks document [(first (:chunks document))])]
+                                     conservative-batch-marker
+                                     (empty-diff-batch))))
+    (-> document
+        (dissoc :content_changes)
+        (assoc :content_changes_omitted true))
+    document))
 
 (defn- prompt-fit-details
   [documents estimated-tokens max-tokens]
@@ -407,10 +439,10 @@
     tokens))
 
 (defn- require-chunk-fits!
-  [input document chunk max-tokens]
+  [input document chunk include-change-evidence? max-tokens]
   (try
     (require-prompt-fits! input
-                          [(with-chunks document [chunk])]
+                          [(with-chunks document [chunk] include-change-evidence?)]
                           (empty-diff-batch)
                           max-tokens
                           :alida.verify/chunk-exceeds-max-prompt-tokens
@@ -422,10 +454,12 @@
                       e)))))
 
 (defn- append-chunk-document
-  [{:keys [input document batches current max-tokens]} chunk]
+  [{:keys [input document batches current change-evidence-pending? max-tokens]} chunk]
   (let [candidate (conj current chunk)
         candidate-tokens (prompt-token-estimate input
-                                                [(with-chunks document candidate)]
+                                                [(with-chunks document
+                                                              candidate
+                                                              change-evidence-pending?)]
                                                 conservative-batch-marker
                                                 (empty-diff-batch))]
     (cond
@@ -434,41 +468,52 @@
        :document document
        :batches batches
        :current candidate
+       :change-evidence-pending? change-evidence-pending?
        :max-tokens max-tokens}
 
       (seq current)
       (do
-        (require-chunk-fits! input document chunk max-tokens)
+        (require-chunk-fits! input document chunk false max-tokens)
         {:input input
          :document document
-         :batches (conj batches (with-chunks document current))
+         :batches (conj batches
+                        (with-chunks document current change-evidence-pending?))
          :current [chunk]
+         :change-evidence-pending? false
          :max-tokens max-tokens})
 
       :else
       (do
-        (require-chunk-fits! input document chunk max-tokens)
+        (require-chunk-fits! input
+                             document
+                             chunk
+                             change-evidence-pending?
+                             max-tokens)
         {:input input
          :document document
          :batches batches
          :current [chunk]
+         :change-evidence-pending? change-evidence-pending?
          :max-tokens max-tokens}))))
 
 (defn- split-document
   [input document max-tokens]
-  (if (<= (prompt-token-estimate input [document] conservative-batch-marker (empty-diff-batch))
-          max-tokens)
-    [document]
-    (let [{:keys [batches current]}
-          (reduce append-chunk-document
-                  {:input input
-                   :document document
-                   :batches []
-                   :current []
-                   :max-tokens max-tokens}
-                  (:chunks document))]
-      (cond-> batches
-        (seq current) (conj (with-chunks document current))))))
+  (let [document (fit-content-changes input document max-tokens)]
+    (if (<= (prompt-token-estimate input [document] conservative-batch-marker (empty-diff-batch))
+            max-tokens)
+      [document]
+      (let [{:keys [batches current change-evidence-pending?]}
+            (reduce append-chunk-document
+                    {:input input
+                     :document document
+                     :batches []
+                     :current []
+                     :change-evidence-pending? (change-evidence? document)
+                     :max-tokens max-tokens}
+                    (:chunks document))]
+        (cond-> batches
+          (seq current)
+          (conj (with-chunks document current change-evidence-pending?)))))))
 
 (defn- prompt-documents
   [input documents max-tokens]
@@ -962,8 +1007,15 @@
                                      (:raw_response synthesis-result))
                            (assoc-in [:raw_response :prose_summary_version]
                                      prose-summary-version))]
-        (if-let [details (batch-review-details results)]
-          (assoc-in summarized [:raw_response :batch_review_details] details)
+        (if-let [details (if (= "pass" (:verdict combined))
+                           (pass-change-summary-details results)
+                           (batch-review-details results))]
+          (assoc-in summarized
+                    [:raw_response
+                     (if (= "pass" (:verdict combined))
+                       :batch_change_details
+                       :batch_review_details)]
+                    details)
           summarized))
       combined)))
 

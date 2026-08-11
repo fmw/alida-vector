@@ -312,12 +312,11 @@
         (slack-change-detail-text summary)))
 
 (defn- slack-llm-summary-block
-  [{:keys [verification] :as summary}]
+  [{:keys [verification]}]
   (let [llm-verdict (:llm_verdict verification)
         reasoning (str/trim (or (:reasoning verification) ""))
         title (cond
-                (and (= "pass" (verdict summary))
-                     (= "pass" llm-verdict))
+                (= "pass" llm-verdict)
                 "LLM change summary"
 
                 (#{"caution" "fail"} llm-verdict)
@@ -443,6 +442,8 @@
             (llm-verification-section summary verification)
             (when-let [details (get-in verification [:raw_response :batch_review_details])]
               (str "LLM Batch Review Details\n" details))
+            (when-let [details (get-in verification [:raw_response :batch_change_details])]
+              (str "LLM Batch Change Details\n" details))
             (section "LLM Security Findings"
                      (map finding-line (:llm_security_findings verification)))
             (str/join

@@ -597,7 +597,7 @@
           (< 3 available)
           {:segments (conj included
                            (str (subs segment 0 (- available 3)) "..."))
-           :omitted_count (count remaining)}
+           :omitted_count (count (next remaining))}
 
           :else
           {:segments included
@@ -633,41 +633,66 @@
     (set (concat added changed moved))))
 
 (defn- verification-documents
-  ([source-results run-diff]
-   (verification-documents source-results run-diff {}))
-  ([source-results run-diff previous-chunks-by-document]
-   (let [wanted (current-diff-keys run-diff)]
-     (->> source-results
-          (mapcat (fn [{:keys [source_cfg documents]}]
-                    ;; The in-memory document map carries :canonical_url but not
-                    ;; :source_id (the extractors never set it; it is attached from
-                    ;; source-cfg only at persist time). The diff keys, read back
-                    ;; from the DB, do include source_id, so we must stamp it on
-                    ;; here or document-key never matches and no changed/added page
-                    ;; content reaches the verifier.
-                    (map #(update % :document assoc :source_id (:id source_cfg))
-                         documents)))
-          (filter #(contains? wanted (document-key (:document %))))
-          (mapv (fn [{:keys [document chunks] :as result}]
-                  (cond-> (verification-document result)
-                    (contains? previous-chunks-by-document (document-key document))
-                    (assoc :content_changes
-                           (content-changes
-                            (get previous-chunks-by-document (document-key document))
-                            chunks)))))))))
+  [source-results run-diff]
+  (let [wanted (current-diff-keys run-diff)]
+    (->> source-results
+         (mapcat (fn [{:keys [source_cfg documents]}]
+                   ;; The in-memory document map carries :canonical_url but not
+                   ;; :source_id (the extractors never set it; it is attached from
+                   ;; source-cfg only at persist time). The diff keys, read back
+                   ;; from the DB, do include source_id, so we must stamp it on
+                   ;; here or document-key never matches and no changed/added page
+                   ;; content reaches the verifier.
+                   (map #(update % :document assoc :source_id (:id source_cfg))
+                        documents)))
+         (filter #(contains? wanted (document-key (:document %))))
+         (mapv verification-document))))
 
-(defn- previous-change-chunks
-  [ds run-diff]
-  (let [document-keys (mapv document-key (:changed_urls run-diff))]
+(def previous-change-document-batch-size 50)
+
+(defn- previous-content-changes
+  [ds run-diff documents]
+  ;; A moved URL is hash-identical by the diff contract. A move combined with an
+  ;; edit is represented as one removal and one addition because there is no
+  ;; stable identity with which to pair the two documents.
+  (let [current-by-document (into {} (map (juxt document-key identity)) documents)
+        document-keys (->> (:changed_urls run-diff)
+                           (map document-key)
+                           (filter #(contains? current-by-document %))
+                           distinct
+                           vec)]
     (if (and (:previous_run_id run-diff) (seq document-keys))
       (if-let [previous-run (db/get-run ds (:previous_run_id run-diff))]
-        (group-by document-key
-                  (db/list-document-chunk-content ds
-                                                  (:embedding_dimensions previous-run)
-                                                  (:id previous-run)
-                                                  document-keys))
+        (reduce
+         (fn [changes batch]
+           (let [previous-by-document
+                 (group-by document-key
+                           (db/list-document-chunk-content
+                            ds
+                            (:embedding_dimensions previous-run)
+                            (:id previous-run)
+                            batch))]
+             (reduce (fn [result key]
+                       (if-let [previous-chunks (not-empty (get previous-by-document key))]
+                         (assoc result
+                                key
+                                (content-changes previous-chunks
+                                                 (:chunks (get current-by-document key))))
+                         result))
+                     changes
+                     batch)))
+         {}
+         (partition-all previous-change-document-batch-size document-keys))
         {})
       {})))
+
+(defn- attach-content-changes
+  [documents changes-by-document]
+  (mapv (fn [document]
+          (if-let [changes (get changes-by-document (document-key document))]
+            (assoc document :content_changes changes)
+            document))
+        documents))
 
 (defn- llm-verification-enabled?
   [verification-cfg]
@@ -779,14 +804,17 @@
   [sys ds run run-diff deterministic-verification source-results]
   (let [verification-cfg (:verification (:alida/config sys))
         llm-details (when (llm-verification-enabled? verification-cfg)
-                      (let [prompts (verify/build-prompts
+                      (let [documents (verification-documents source-results run-diff)
+                            changes-by-document (previous-content-changes ds
+                                                                          run-diff
+                                                                          documents)
+                            prompts (verify/build-prompts
                                      {:index_name (:index_name run)
                                       :deterministic_verification deterministic-verification
                                       :diff run-diff
-                                      :documents (verification-documents
-                                                  source-results
-                                                  run-diff
-                                                  (previous-change-chunks ds run-diff))
+                                      :documents (attach-content-changes
+                                                  documents
+                                                  changes-by-document)
                                       :max_prompt_tokens (:max_prompt_tokens verification-cfg)})]
                         (u/log ::verification-start
                                :index-name (:index_name run)

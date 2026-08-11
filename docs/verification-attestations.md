@@ -32,7 +32,8 @@ synthesis call to combine multiple passing change summaries or at least three
 distinct review reasons. Trusted-source reuse never makes this additional
 provider call. The stored attested verdict and findings remain authoritative if
 synthesis fails or disagrees with them. The raw response retains each batch
-result, and the full report keeps the non-pass batch review details.
+result, and the full report keeps both passing batch change details and non-pass
+batch review details.
 
 The synthesis prompt is versioned separately from the verification input hash.
 Accepted prose stores `prose_summary_version` beside `prose_summary` in the raw

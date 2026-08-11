@@ -91,12 +91,14 @@
     (let [{:keys [connectable statement opts]} (first @calls)]
       (is (= :ds connectable))
       (is (= db/jdbc-opts opts))
+      (is (str/includes? (first statement) "FROM (VALUES (?, ?), (?, ?))"))
       (is (str/includes? (first statement) "JOIN alida_chunks_1536"))
-      (is (= [run-id
-              "docs"
+      (is (not (str/includes? (first statement) " OR ")))
+      (is (= ["docs"
               "https://example.test/a"
               "support"
-              "https://example.test/b"]
+              "https://example.test/b"
+              run-id]
              (vec (rest statement)))))))
 
 (deftest listing-chunk-content-skips-the-database-for-no-document-keys

@@ -34,7 +34,9 @@
   (is (str/includes? verify/system-prompt
                      "use reasoning for a concise, human-facing summary"))
   (is (str/includes? verify/system-prompt
-                     "do not merely state that validation passed")))
+                     "do not merely state that validation passed"))
+  (is (str/includes? verify/system-prompt "content_changes_omitted"))
+  (is (str/includes? verify/system-prompt "content_changes_continuation")))
 
 (deftest deterministic-gate-passes-when-thresholds-are-not-exceeded
   (is (= {:deterministic_verdict "pass"
@@ -388,6 +390,47 @@
     (is (some #(str/includes? % "alpha marker one") prompts))
     (is (some #(str/includes? % "omega marker three") prompts))))
 
+(deftest build-prompts-drops-change-evidence-that-cannot-fit-with-one-chunk
+  (let [large-change (str "large-change-marker-" (apply str (repeat 20000 "x")))
+        prompts (verify/build-prompts
+                 {:index_name "docs"
+                  :deterministic_verification {:deterministic_verdict "pass"}
+                  :diff {:summary {:changed_count 1}
+                         :changed_urls [{:source_id "docs"
+                                         :canonical_url "https://example.test/changed"}]}
+                  :max_prompt_tokens 12000
+                  :documents [{:source_id "docs"
+                               :canonical_url "https://example.test/changed"
+                               :content_changes {:removed_segments [large-change]
+                                                 :added_segments [large-change]}
+                               :chunks [{:content "small current content"}]}]})
+        prompt (first prompts)]
+    (is (= 1 (count prompts)))
+    (is (str/includes? prompt "small current content"))
+    (is (str/includes? prompt "\"content_changes_omitted\":true"))
+    (is (not (str/includes? prompt "large-change-marker")))))
+
+(deftest build-prompts-attaches-change-evidence-only-to-the-first-document-fragment
+  (let [prompts (verify/build-prompts
+                 {:index_name "docs"
+                  :deterministic_verification {:deterministic_verdict "pass"}
+                  :diff {:summary {:changed_count 1}
+                         :changed_urls [{:source_id "docs"
+                                         :canonical_url "https://example.test/large"}]}
+                  :max_prompt_tokens 550
+                  :documents [{:source_id "docs"
+                               :canonical_url "https://example.test/large"
+                               :content_changes {:removed_segments ["unique old evidence"]
+                                                 :added_segments ["unique new evidence"]}
+                               :chunks [{:content "alpha marker one"}
+                                        {:content (apply str (repeat 45 "middle "))}
+                                        {:content "omega marker three"}]}]})
+        combined (str/join "\n" prompts)]
+    (is (< 1 (count prompts)))
+    (is (= 1 (count (re-seq #"unique old evidence" combined))))
+    (is (= (dec (count prompts))
+           (count (re-seq #"content_changes_continuation" combined))))))
+
 (deftest build-prompts-fails-before-provider-for-single-oversized-chunk
   (is (thrown-with-msg?
        clojure.lang.ExceptionInfo
@@ -720,6 +763,10 @@
     (is (= (:findings combined) (:findings summarized)))
     (is (= (:security_findings combined) (:security_findings summarized)))
     (is (nil? (get-in summarized [:raw_response :batch_review_details])))
+    (is (= (str "Change summaries:\n"
+                "- Batch 1: Added two localized guides.\n"
+                "- Batch 2: Updated billing terms in three locales.")
+           (get-in summarized [:raw_response :batch_change_details])))
     (is (verify/prose-summary-current? summarized))))
 
 (deftest combine-batch-results-requires-at-least-one-result

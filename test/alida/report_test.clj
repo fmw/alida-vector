@@ -154,6 +154,18 @@
               block-texts))
     (is (not-any? #(str/includes? % "LLM validation") block-texts))))
 
+(deftest slack-blocks-retain-llm-change-summary-when-the-deterministic-gate-flags-the-run
+  (doseq [final-verdict ["caution" "fail"]]
+    (let [blocks (:slack_blocks
+                  (report/build
+                   (assoc summary
+                          :verification_verdict final-verdict
+                          :verification {:llm_verdict "pass"
+                                         :reasoning "Updated localized billing guidance."})))
+          block-texts (keep #(get-in % [:text :text]) blocks)]
+      (is (some #(str/includes? % "*LLM change summary*") block-texts))
+      (is (some #(str/includes? % "Updated localized billing guidance.") block-texts)))))
+
 (deftest slack-blocks-explain-non-pass-llm-verdicts
   (doseq [llm-verdict ["caution" "fail"]]
     (let [blocks (:slack_blocks (report/build (assoc summary
@@ -220,6 +232,25 @@
     (is (str/includes? full-report "Review redirect A."))
     (is (str/includes? full-report "Review missing title C."))
     (is (not (str/includes? slack-text "Review redirect A.")))))
+
+(deftest full-report-retains-passing-batch-details-below-synthesized-prose
+  (let [full-report
+        (:full_report
+         (report/build
+          (assoc summary
+                 :verification_verdict "pass"
+                 :verification
+                 {:llm_verdict "pass"
+                  :reasoning "2 verification batches reviewed: all passed.\n\nChange summary:\nUpdated guides."
+                  :raw_response
+                  {:summary {:batch_count 2}
+                   :batch_change_details
+                   (str "Change summaries:\n"
+                        "- Batch 1: Added an English guide.\n"
+                        "- Batch 2: Added a Dutch guide.")}})))]
+    (is (str/includes? full-report "LLM Batch Change Details\nChange summaries:"))
+    (is (str/includes? full-report "Added an English guide."))
+    (is (str/includes? full-report "Added a Dutch guide."))))
 
 (deftest full-report-omits-batch-count-for-the-common-single-batch-case
   (let [full-report (:full_report
