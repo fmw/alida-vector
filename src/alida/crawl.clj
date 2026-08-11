@@ -547,6 +547,78 @@
   [chunk]
   (select-keys chunk [:chunk_index :chunk_count :heading_path :content :content_hash :estimated_tokens]))
 
+(def max-verification-change-segments 100)
+(def max-verification-change-characters 20000)
+
+(defn- content-segments
+  [chunks]
+  (->> chunks
+       (map :content)
+       (remove nil?)
+       (str/join "\n")
+       (#(str/split % #"\n+"))
+       (map str/trim)
+       (remove str/blank?)
+       vec))
+
+(defn- ordered-multiset-difference
+  [values subtracted-values]
+  (:difference
+   (reduce (fn [{:keys [remaining] :as result} value]
+             (if (pos? (get remaining value 0))
+               (update-in result [:remaining value] dec)
+               (update result :difference conj value)))
+           {:remaining (frequencies subtracted-values)
+            :difference []}
+           values)))
+
+(defn- bounded-change-segments
+  [segments]
+  (loop [remaining (seq segments)
+         included []
+         character-count 0]
+    (cond
+      (nil? remaining)
+      {:segments included}
+
+      (<= max-verification-change-segments (count included))
+      {:segments included
+       :omitted_count (count remaining)}
+
+      :else
+      (let [segment (first remaining)
+            available (- max-verification-change-characters character-count)]
+        (cond
+          (<= (count segment) available)
+          (recur (next remaining)
+                 (conj included segment)
+                 (+ character-count (count segment)))
+
+          (< 3 available)
+          {:segments (conj included
+                           (str (subs segment 0 (- available 3)) "..."))
+           :omitted_count (count remaining)}
+
+          :else
+          {:segments included
+           :omitted_count (count remaining)})))))
+
+(defn- content-changes
+  [previous-chunks current-chunks]
+  (let [previous-segments (content-segments previous-chunks)
+        current-segments (content-segments current-chunks)
+        removed (bounded-change-segments
+                 (ordered-multiset-difference previous-segments current-segments))
+        added (bounded-change-segments
+               (ordered-multiset-difference current-segments previous-segments))]
+    (cond-> {:removed_segments (:segments removed)
+             :added_segments (:segments added)}
+      (pos? (:omitted_count removed 0))
+      (assoc :removed_segments_omitted (:omitted_count removed))
+
+      (pos? (:omitted_count added 0))
+      (assoc :added_segments_omitted (:omitted_count added)))))
+
 (defn- verification-document
   [{:keys [document chunks]}]
   (assoc (select-keys document [:source_id :canonical_url :title :locale :normalized_content_hash])
@@ -561,20 +633,41 @@
     (set (concat added changed moved))))
 
 (defn- verification-documents
-  [source-results run-diff]
-  (let [wanted (current-diff-keys run-diff)]
-    (->> source-results
-         (mapcat (fn [{:keys [source_cfg documents]}]
-                   ;; The in-memory document map carries :canonical_url but not
-                   ;; :source_id (the extractors never set it; it is attached from
-                   ;; source-cfg only at persist time). The diff keys, read back
-                   ;; from the DB, do include source_id, so we must stamp it on
-                   ;; here or document-key never matches and no changed/added page
-                   ;; content reaches the verifier.
-                   (map #(update % :document assoc :source_id (:id source_cfg))
-                        documents)))
-         (filter #(contains? wanted (document-key (:document %))))
-         (mapv verification-document))))
+  ([source-results run-diff]
+   (verification-documents source-results run-diff {}))
+  ([source-results run-diff previous-chunks-by-document]
+   (let [wanted (current-diff-keys run-diff)]
+     (->> source-results
+          (mapcat (fn [{:keys [source_cfg documents]}]
+                    ;; The in-memory document map carries :canonical_url but not
+                    ;; :source_id (the extractors never set it; it is attached from
+                    ;; source-cfg only at persist time). The diff keys, read back
+                    ;; from the DB, do include source_id, so we must stamp it on
+                    ;; here or document-key never matches and no changed/added page
+                    ;; content reaches the verifier.
+                    (map #(update % :document assoc :source_id (:id source_cfg))
+                         documents)))
+          (filter #(contains? wanted (document-key (:document %))))
+          (mapv (fn [{:keys [document chunks] :as result}]
+                  (cond-> (verification-document result)
+                    (contains? previous-chunks-by-document (document-key document))
+                    (assoc :content_changes
+                           (content-changes
+                            (get previous-chunks-by-document (document-key document))
+                            chunks)))))))))
+
+(defn- previous-change-chunks
+  [ds run-diff]
+  (let [document-keys (mapv document-key (:changed_urls run-diff))]
+    (if (and (:previous_run_id run-diff) (seq document-keys))
+      (if-let [previous-run (db/get-run ds (:previous_run_id run-diff))]
+        (group-by document-key
+                  (db/list-document-chunk-content ds
+                                                  (:embedding_dimensions previous-run)
+                                                  (:id previous-run)
+                                                  document-keys))
+        {})
+      {})))
 
 (defn- llm-verification-enabled?
   [verification-cfg]
@@ -690,7 +783,10 @@
                                      {:index_name (:index_name run)
                                       :deterministic_verification deterministic-verification
                                       :diff run-diff
-                                      :documents (verification-documents source-results run-diff)
+                                      :documents (verification-documents
+                                                  source-results
+                                                  run-diff
+                                                  (previous-change-chunks ds run-diff))
                                       :max_prompt_tokens (:max_prompt_tokens verification-cfg)})]
                         (u/log ::verification-start
                                :index-name (:index_name run)

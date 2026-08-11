@@ -30,6 +30,12 @@
               (json/read-str (subs section (count prefix)) :key-fn keyword)))
           (str/split prompt #"\n\n"))))
 
+(deftest verification-system-prompt-requests-a-pass-change-summary
+  (is (str/includes? verify/system-prompt
+                     "use reasoning for a concise, human-facing summary"))
+  (is (str/includes? verify/system-prompt
+                     "do not merely state that validation passed")))
+
 (deftest deterministic-gate-passes-when-thresholds-are-not-exceeded
   (is (= {:deterministic_verdict "pass"
           :deterministic_findings []}
@@ -267,6 +273,8 @@
                                :chunks [{:content "added page body"}]}
                               {:source_id "docs"
                                :canonical_url "https://example.test/changed"
+                               :content_changes {:removed_segments ["Thirty (60) days"]
+                                                 :added_segments ["Sixty (60) days"]}
                                :chunks [{:content "changed page body"}]}
                               {:source_id "docs"
                                :canonical_url "https://example.test/moved"
@@ -293,6 +301,10 @@
              :classification "changed"}]
            (get-in documents-by-url
                    ["https://example.test/changed" :diff_entries])))
+    (is (= {:removed_segments ["Thirty (60) days"]
+            :added_segments ["Sixty (60) days"]}
+           (get-in documents-by-url
+                   ["https://example.test/changed" :content_changes])))
     (is (= [{:classification "added"}
             {:previous_canonical_url "https://example.test/previous"
              :current_canonical_url "https://example.test/moved"
@@ -440,24 +452,28 @@
             :raw_response {:verdict "caution"
                            :reasoning "Review the redirect chain."}}]))))
 
-(deftest combine-passing-batches-replaces-repeated-reasoning-with-a-tally
+(deftest combine-passing-batches-retains-change-summaries-as-a-fallback
   (let [results [{:verdict "pass"
-                  :reasoning "The first batch looks safe."
+                  :reasoning "Added the English and Dutch setup guides."
                   :findings [{:type "informational"}]
                   :security_findings []
                   :raw_response {:verdict "pass"
-                                 :reasoning "The first batch looks safe."
+                                 :reasoning "Added the English and Dutch setup guides."
                                  :findings [{:type "informational"}]}}
                  {:verdict "pass"
-                  :reasoning "The second batch looks safe."
+                  :reasoning "Updated billing terms in three locales."
                   :findings [{:type "informational"}]
                   :security_findings []
                   :raw_response {:verdict "pass"
-                                 :reasoning "The second batch looks safe."
+                                 :reasoning "Updated billing terms in three locales."
                                  :findings [{:type "informational"}]}}]
         combined (verify/combine-batch-results results)]
     (is (= "pass" (:verdict combined)))
-    (is (= "All 2 verification batches passed." (:reasoning combined)))
+    (is (= (str "All 2 verification batches passed."
+                "\n\nChange summaries:"
+                "\n- Batch 1: Added the English and Dutch setup guides."
+                "\n- Batch 2: Updated billing terms in three locales.")
+           (:reasoning combined)))
     (is (= [{:type "informational"}
             {:type "informational"}]
            (:findings combined)))
@@ -550,8 +566,11 @@
                                 :batches [{:reasoning "Malformed but already normalized."}]}}]
     (is (= current (verify/normalize-batched-result current)))))
 
-(deftest prose-synthesis-requires-three-distinct-consistent-review-reasons
-  (let [one-reason [{:verdict "pass" :reasoning "Fine."}
+(deftest prose-synthesis-requires-multiple-pass-summaries-or-three-review-reasons
+  (let [single-pass [{:verdict "pass" :reasoning "Added one guide."}]
+        two-pass-summaries [{:verdict "pass" :reasoning "Added two guides."}
+                            {:verdict "pass" :reasoning "Updated billing terms."}]
+        one-reason [{:verdict "pass" :reasoning "Fine."}
                     {:verdict "caution" :reasoning "Review links."}]
         duplicate-reasons [{:verdict "caution" :reasoning "Review links."}
                            {:verdict "caution" :reasoning " Review links. "}]
@@ -565,10 +584,13 @@
         (update-in combined
                    [:raw_response :summary :verdict_counts]
                    #(into {} (map (fn [[verdict n]] [(keyword verdict) n]) %)))]
-    (doseq [results [one-reason duplicate-reasons two-reasons]]
+    (doseq [results [single-pass one-reason duplicate-reasons two-reasons]]
       (is (false? (verify/prose-synthesis-needed?
                    (verify/combine-batch-results results)
                    results))))
+    (is (true? (verify/prose-synthesis-needed?
+                (verify/combine-batch-results two-pass-summaries)
+                two-pass-summaries)))
     (is (true? (verify/prose-synthesis-needed? combined three-reasons)))
     (is (true? (verify/prose-synthesis-needed? database-shaped three-reasons)))
     (is (false? (verify/prose-synthesis-needed?
@@ -590,6 +612,19 @@
              :security_findings []}]
            (:review_groups input)))
     (is (str/includes? prompt "Do not include the verdict tally"))))
+
+(deftest prose-summary-prompt-includes-passing-change-summaries
+  (let [prompt (verify/build-prose-summary-prompt
+                [{:verdict "pass" :reasoning "Added two localized guides."}
+                 {:verdict "pass" :reasoning "Updated the billing terms."}])
+        input (json/read-str (last (str/split prompt #"\n\n")) :key-fn keyword)]
+    (is (= "pass" (:authoritative_verdict input)))
+    (is (= [] (:review_groups input)))
+    (is (= [{:batch_numbers [1]
+             :reasoning "Added two localized guides."}
+            {:batch_numbers [2]
+             :reasoning "Updated the billing terms."}]
+           (:change_summaries input)))))
 
 (deftest prose-summary-prompt-groups-duplicate-reasons-without-losing-findings
   (let [results (vec
@@ -658,6 +693,34 @@
              (verify/apply-prose-summary divergent
                                          results
                                          (assoc synthesis :verdict "fail")))))))
+
+(deftest prose-summary-combines-passing-change-summaries
+  (let [results [{:verdict "pass"
+                  :reasoning "Added two localized guides."
+                  :raw_response {:verdict "pass"
+                                 :reasoning "Added two localized guides."}}
+                 {:verdict "pass"
+                  :reasoning "Updated billing terms in three locales."
+                  :raw_response {:verdict "pass"
+                                 :reasoning "Updated billing terms in three locales."}}]
+        combined (verify/combine-batch-results results)
+        synthesis {:verdict "pass"
+                   :reasoning "Added localized guides and updated multilingual billing terms."
+                   :findings []
+                   :security_findings []
+                   :raw_response {:verdict "pass"
+                                  :reasoning (str "Added localized guides and updated multilingual "
+                                                  "billing terms.")}}
+        summarized (verify/apply-prose-summary combined results synthesis)]
+    (is (= (str "All 2 verification batches passed."
+                "\n\nChange summary:\n"
+                "Added localized guides and updated multilingual billing terms.")
+           (:reasoning summarized)))
+    (is (= "pass" (:verdict summarized)))
+    (is (= (:findings combined) (:findings summarized)))
+    (is (= (:security_findings combined) (:security_findings summarized)))
+    (is (nil? (get-in summarized [:raw_response :batch_review_details])))
+    (is (verify/prose-summary-current? summarized))))
 
 (deftest combine-batch-results-requires-at-least-one-result
   (is (thrown-with-msg? clojure.lang.ExceptionInfo

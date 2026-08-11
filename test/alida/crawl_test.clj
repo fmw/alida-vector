@@ -551,6 +551,50 @@
     (is (str/includes? (get-in result [:raw_response :batch_review_details])
                        "A third page is missing its title."))))
 
+(deftest verification-synthesizes-multiple-passing-change-summaries
+  (let [calls (atom [])
+        batch-results
+        (atom [{:verdict "pass"
+                :reasoning "Added English and Dutch setup guides."
+                :raw_response {:verdict "pass"
+                               :reasoning "Added English and Dutch setup guides."}}
+               {:verdict "pass"
+                :reasoning "Updated billing terms in three locales."
+                :raw_response {:verdict "pass"
+                               :reasoning "Updated billing terms in three locales."}}])
+        synthesis-result
+        {:verdict "pass"
+         :reasoning "Added localized setup guides and updated multilingual billing terms."
+         :findings []
+         :security_findings []
+         :raw_response {:verdict "pass"
+                        :reasoning (str "Added localized setup guides and updated multilingual "
+                                        "billing terms.")}}
+        result
+        (with-redefs [verify/complete-with-retries
+                      (fn [& args]
+                        (swap! calls conj args)
+                        (if (= 3 (count args))
+                          (let [result (first @batch-results)]
+                            (swap! batch-results subvec 1)
+                            result)
+                          synthesis-result))]
+          (#'crawl/complete-llm-verification!
+           {}
+           {}
+           {:id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+            :index_name "docs"}
+           ["prompt 1" "prompt 2"]))]
+    (is (= 3 (count @calls)))
+    (is (= {:system-prompt verify/prose-summary-system-prompt}
+           (nth (last @calls) 2)))
+    (is (= "pass" (:verdict result)))
+    (is (= (str "All 2 verification batches passed."
+                "\n\nChange summary:\n"
+                "Added localized setup guides and updated multilingual billing terms.")
+           (:reasoning result)))
+    (is (verify/prose-summary-current? result))))
+
 (deftest verification-skips-prose-call-for-two-review-reasons
   (let [calls (atom 0)
         batch-results
@@ -698,3 +742,81 @@
     (is (= ["Body of https://example.com/changed/"]
            (mapv :content (-> documents first :chunks)))
         "the changed page's body content is included for the verifier")))
+
+(deftest verification-documents-adds-old-versus-new-content-segments
+  (let [url "https://example.com/changed/"
+        source-results
+        [{:source_cfg {:id "website"}
+          :documents [{:document {:canonical_url url
+                                  :title "Changed page"
+                                  :locale "en"
+                                  :normalized_content_hash "new-hash"}
+                       :chunks [{:chunk_index 0
+                                 :chunk_count 1
+                                 :content (str "Shared introduction\n"
+                                               "Sixty (60) days\n"
+                                               "New utilization dashboard")
+                                 :content_hash "new-hash"
+                                 :estimated_tokens 10}]}]}]
+        run-diff {:added_urls []
+                  :removed_urls []
+                  :moved_urls []
+                  :changed_urls [{:source_id "website"
+                                  :canonical_url url
+                                  :previous_normalized_content_hash "old-hash"
+                                  :current_normalized_content_hash "new-hash"}]}
+        previous-chunks
+        {["website" url] [{:chunk_index 0
+                            :content (str "Shared introduction\n"
+                                          "Thirty (60) days\n"
+                                          "Classic utilization dashboards")}]}
+        document (first (#'crawl/verification-documents
+                         source-results
+                         run-diff
+                         previous-chunks))]
+    (is (= {:removed_segments ["Thirty (60) days"
+                               "Classic utilization dashboards"]
+            :added_segments ["Sixty (60) days"
+                             "New utilization dashboard"]}
+           (:content_changes document)))))
+
+(deftest verification-content-changes-are-bounded
+  (let [many-segments (str/join "\n" (map #(str "Old segment " %) (range 101)))
+        long-segment (apply str (repeat (+ crawl/max-verification-change-characters 10) "x"))
+        changes (#'crawl/content-changes
+                 [{:content many-segments}]
+                 [{:content long-segment}])]
+    (is (= crawl/max-verification-change-segments
+           (count (:removed_segments changes))))
+    (is (= 1 (:removed_segments_omitted changes)))
+    (is (= crawl/max-verification-change-characters
+           (count (first (:added_segments changes)))))
+    (is (= 1 (:added_segments_omitted changes)))))
+
+(deftest previous-change-chunks-loads-only-changed-documents
+  (let [previous-run-id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61c"
+        calls (atom [])
+        rows [{:source_id "website"
+               :canonical_url "https://example.com/changed/"
+               :chunk_index 0
+               :content "Previous content"}]]
+    (with-redefs [db/get-run (fn [ds run-id]
+                              (swap! calls conj [:run ds run-id])
+                              {:id previous-run-id
+                               :embedding_dimensions 1536})
+                  db/list-document-chunk-content
+                  (fn [ds dimensions run-id document-keys]
+                    (swap! calls conj [:chunks ds dimensions run-id document-keys])
+                    rows)]
+      (is (= {["website" "https://example.com/changed/"] rows}
+             (#'crawl/previous-change-chunks
+              :ds
+              {:previous_run_id previous-run-id
+               :changed_urls [{:source_id "website"
+                               :canonical_url "https://example.com/changed/"}]
+               :added_urls [{:source_id "website"
+                             :canonical_url "https://example.com/added/"}]}))))
+    (is (= [[:run :ds previous-run-id]
+            [:chunks :ds 1536 previous-run-id
+             [["website" "https://example.com/changed/"]]]]
+           @calls))))

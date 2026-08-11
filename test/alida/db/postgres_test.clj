@@ -66,3 +66,40 @@
       (is (= "{\"locale\":\"en\"}" (.getValue (nth (first param-rows) 10))))
       (is (= "[]" (.getValue (nth (second param-rows) 9))))
       (is (= "{}" (.getValue (nth (second param-rows) 10)))))))
+
+(deftest lists-chunk-content-for-selected-documents
+  (let [calls (atom [])
+        run-id (java.util.UUID/randomUUID)]
+    (with-redefs [jdbc/execute! (fn [connectable statement opts]
+                                  (swap! calls conj {:connectable connectable
+                                                     :statement statement
+                                                     :opts opts})
+                                  [{:source_id "docs"
+                                    :canonical_url "https://example.test/a"
+                                    :chunk_index 0
+                                    :content "Previous content"}])]
+      (is (= [{:source_id "docs"
+               :canonical_url "https://example.test/a"
+               :chunk_index 0
+               :content "Previous content"}]
+             (db/list-document-chunk-content
+              :ds
+              1536
+              run-id
+              [["docs" "https://example.test/a"]
+               ["support" "https://example.test/b"]]))))
+    (let [{:keys [connectable statement opts]} (first @calls)]
+      (is (= :ds connectable))
+      (is (= db/jdbc-opts opts))
+      (is (str/includes? (first statement) "JOIN alida_chunks_1536"))
+      (is (= [run-id
+              "docs"
+              "https://example.test/a"
+              "support"
+              "https://example.test/b"]
+             (vec (rest statement)))))))
+
+(deftest listing-chunk-content-skips-the-database-for-no-document-keys
+  (with-redefs [jdbc/execute! (fn [& _]
+                                (throw (ex-info "must not query" {})))]
+    (is (= [] (db/list-document-chunk-content :ds 1536 (java.util.UUID/randomUUID) [])))))
