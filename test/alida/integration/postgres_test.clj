@@ -168,6 +168,30 @@
                (:relations result)))
         (is (= "alida_runs_embedding_reuse_idx" (:reuse-index result)))))))
 
+(deftest ^:integration selected-document-chunk-content-values-join-executes
+  (let [result
+        (with-temp-database
+          (fn [db-config _ds]
+            (db/migrate! {:database db-config})
+            (with-open [ds (db/datasource db-config)]
+              (let [run (db/create-run! ds index-cfg "hash-1")
+                    canonical-url (str "https://example.test/" (:id run))]
+                (insert-searchable-chunk! ds (:id run) "Selected previous content")
+                {:canonical-url canonical-url
+                 :rows (db/list-document-chunk-content
+                        ds
+                        1536
+                        (:id run)
+                        [["support" canonical-url]
+                         ["support" "https://example.test/not-selected"]])}))))]
+    (if (= :skipped result)
+      (is true "Skipping Postgres integration test; ALIDA_TEST_DATABASE_URL is not set.")
+      (is (= [{:source_id "support"
+               :canonical_url (:canonical-url result)
+               :chunk_index 0
+               :content "Selected previous content"}]
+             (:rows result))))))
+
 (deftest ^:integration verification-attestations-round-trip-with-trust-order
   (let [result (with-temp-database
                  (fn [db-config ds]

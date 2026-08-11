@@ -410,6 +410,41 @@
     (is (str/includes? prompt "\"content_changes_omitted\":true"))
     (is (not (str/includes? prompt "large-change-marker")))))
 
+(deftest build-prompts-retains-chunkless-documents-after-dropping-oversized-change-evidence
+  (let [large-change (str "removed-content-marker-" (apply str (repeat 20000 "x")))
+        prompts (verify/build-prompts
+                 {:index_name "docs"
+                  :deterministic_verification {:deterministic_verdict "pass"}
+                  :diff {:summary {:changed_count 1}
+                         :changed_urls [{:source_id "docs"
+                                         :canonical_url "https://example.test/now-empty"}]}
+                  :max_prompt_tokens 7500
+                  :documents [{:source_id "docs"
+                               :canonical_url "https://example.test/now-empty"
+                               :content_changes {:removed_segments [large-change]
+                                                 :added_segments []}
+                               :chunks []}]})
+        documents (prompt-json-section (first prompts) "Documents for full diff validation")]
+    (is (= 1 (count prompts)))
+    (is (= ["https://example.test/now-empty"]
+           (mapv :canonical_url documents)))
+    (is (= [] (:chunks (first documents))))
+    (is (true? (:content_changes_omitted (first documents))))
+    (is (not (str/includes? (first prompts) "removed-content-marker")))))
+
+(deftest build-prompts-fails-loudly-for-an-unfittable-chunkless-document
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo
+       #"document without chunks exceeds max_prompt_tokens"
+       (verify/build-prompts
+        {:index_name "docs"
+         :deterministic_verification {:deterministic_verdict "pass"}
+         :diff {:summary {:changed_count 1}}
+         :max_prompt_tokens 1000
+         :documents [{:canonical_url "https://example.test/huge-metadata"
+                      :title (apply str (repeat 10000 "x"))
+                      :chunks []}]}))))
+
 (deftest build-prompts-attaches-change-evidence-only-to-the-first-document-fragment
   (let [prompts (verify/build-prompts
                  {:index_name "docs"

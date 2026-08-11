@@ -67,13 +67,15 @@ reasoning to summarize the substantive corpus changes, and Slack includes that
 summary alongside the URL-level diff. For changed documents, the verifier gets
 bounded text segments found only in the previous or current extracted content,
 so the summary can describe the actual edit instead of the page's general
-subject. Change evidence is loaded and reduced in bounded document batches. If
-it cannot fit beside a single current chunk, it is omitted instead of failing
-the crawl; when a document itself must be split, only its first fragment carries
-the evidence. URL moves are detected only when extracted content is identical;
-a simultaneous move and edit appears as one removal and one addition because
-there is no stable document identity with which to pair them. Multi-batch passes
-make one presentation-only synthesis call to combine their change summaries.
+subject. Change evidence is loaded and reduced in bounded document batches, and
+the retained evidence is capped per document while prompts are constructed. If
+it cannot fit beside a minimal current document, it is omitted instead of
+failing the crawl; when a document itself must be split, only its first fragment
+carries the evidence. URL moves are detected only when extracted content is
+identical; a simultaneous move and edit appears as one removal and one addition
+because there is no stable document identity with which to pair them.
+Multi-batch passes make one presentation-only synthesis call to combine their
+change summaries.
 Non-pass runs retain the reasons that require review and similarly synthesize
 several distinct review reasons when useful. Synthesis cannot change the verdict
 or findings, and a failed synthesis falls back to the individual batch summaries.

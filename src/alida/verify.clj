@@ -400,20 +400,19 @@
    (with-chunks document chunks true))
   ([document chunks include-change-evidence?]
    (let [has-change-evidence? (change-evidence? document)]
-     (cond-> (assoc document :chunks (vec chunks))
-       (and has-change-evidence? (not include-change-evidence?))
-       (dissoc :content_changes :content_changes_omitted)
-
-       (and has-change-evidence? (not include-change-evidence?))
-       (assoc :content_changes_continuation true)))))
+     (if (and has-change-evidence? (not include-change-evidence?))
+       (-> document
+           (assoc :chunks (vec chunks))
+           (dissoc :content_changes :content_changes_omitted)
+           (assoc :content_changes_continuation true))
+       (assoc document :chunks (vec chunks))))))
 
 (defn- fit-content-changes
   [input document max-tokens]
   (if (and (contains? document :content_changes)
-           (seq (:chunks document))
            (< max-tokens
               (prompt-token-estimate input
-                                     [(with-chunks document [(first (:chunks document))])]
+                                     [(with-chunks document (take 1 (:chunks document)))]
                                      conservative-batch-marker
                                      (empty-diff-batch))))
     (-> document
@@ -498,10 +497,26 @@
 
 (defn- split-document
   [input document max-tokens]
-  (let [document (fit-content-changes input document max-tokens)]
-    (if (<= (prompt-token-estimate input [document] conservative-batch-marker (empty-diff-batch))
-            max-tokens)
+  (let [document (fit-content-changes input document max-tokens)
+        estimated-tokens (prompt-token-estimate input
+                                                [document]
+                                                conservative-batch-marker
+                                                (empty-diff-batch))]
+    (cond
+      (<= estimated-tokens max-tokens)
       [document]
+
+      (empty? (:chunks document))
+      (do
+        (require-prompt-fits! input
+                              [document]
+                              (empty-diff-batch)
+                              max-tokens
+                              :alida.verify/chunkless-document-exceeds-max-prompt-tokens
+                              "Verification document without chunks exceeds max_prompt_tokens")
+        [document])
+
+      :else
       (let [{:keys [batches current change-evidence-pending?]}
             (reduce append-chunk-document
                     {:input input
