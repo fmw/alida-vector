@@ -322,6 +322,53 @@
       (is (= :never
              (:redirect-policy (first (filter #(= shim-url (:url %)) @requests))))))))
 
+(deftest api-retries-transient-portal-shim-failures
+  (let [shim-url (str "https://example.atlassian.net"
+                      "/plugins/servlet/servicedesk/customer/confluence/shim/x/abc")
+        shim-attempts (atom 0)
+        sys {:alida/http-request
+             (fn [request]
+               (cond
+                 (= (:url request) (:url source-cfg))
+                 {:status 200 :body (portal-page)}
+
+                 (= (:url request) (category-url))
+                 {:status 200 :body (rest-view-category-response)}
+
+                 (= (:url request) (page-api-url "1001"))
+                 {:status 200
+                  :headers {"Content-Type" "application/json"}
+                  :body (page-response
+                         "1001"
+                         "Article One"
+                         "<article><a href=\"/wiki/x/abc\">Related</a></article>")}
+
+                 (= (:url request) shim-url)
+                 (if (= 1 (swap! shim-attempts inc))
+                   {:status 503 :body "unavailable"}
+                   {:status 302
+                    :headers {"Location" "/servicedesk/customer/kb/view/1003"}})
+
+                 (= (:url request) (page-api-url "1003"))
+                 {:status 200
+                  :headers {"Content-Type" "application/json"}
+                  :body (page-response
+                         "1003"
+                         "Related article"
+                         "<article><p>Related body.</p></article>")}
+
+                 :else
+                 {:status 500 :body "unexpected request"}))
+             :alida/sleep (fn [_millis])
+             :alida/random-int (constantly 0)}
+        items (source/discover sys (assoc source-cfg
+                                          :max_retries 2
+                                          :retry_initial_ms 1
+                                          :retry_jitter_ms 0
+                                          :retry_max_delay_ms 10))]
+    (is (= #{"1001" "1003"} (set (mapv :external_id items))))
+    (is (= 2 @shim-attempts))))
+
 (deftest api-keeps-link-text-in-extracted-content-and-discovers-its-article
   (let [sys (fake-http {"https://example.atlassian.net/servicedesk/customer/portal/1"
                         {:status 200 :body (portal-page)}

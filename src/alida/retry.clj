@@ -4,6 +4,8 @@
            [java.time Instant ZonedDateTime]
            [java.time.format DateTimeFormatter]))
 
+(def default-retry-max-delay-ms 60000)
+
 (defn sleep!
   [sys millis]
   (if-let [sleep-fn (:alida/sleep sys)]
@@ -38,10 +40,18 @@
     (Long/parseLong (str value))
     (catch Exception _ nil)))
 
+(defn- retry-after-seconds-ms
+  [value]
+  (when-let [seconds (parse-long-safe value)]
+    (when-not (neg? seconds)
+      (if (> seconds (quot Long/MAX_VALUE 1000))
+        Long/MAX_VALUE
+        (* seconds 1000)))))
+
 (defn retry-after-ms
   [headers]
   (when-let [value (header-value headers "Retry-After")]
-    (or (some-> value parse-long-safe (* 1000))
+    (or (retry-after-seconds-ms value)
         (try
           (let [retry-at (.toInstant (ZonedDateTime/parse value DateTimeFormatter/RFC_1123_DATE_TIME))
                 millis (- (.toEpochMilli retry-at) (.toEpochMilli (Instant/now)))]
@@ -49,15 +59,26 @@
           (catch Exception _ nil)))))
 
 (defn with-retries
-  [sys {:keys [max_retries retry_initial_ms retry_jitter_ms operation error-context]} f]
+  [sys {:keys [max_retries
+               retry_initial_ms
+               retry_jitter_ms
+               retry_max_delay_ms
+               operation
+               error-context]}
+   f]
   (let [max-retries max_retries
         retry-initial-ms retry_initial_ms
         retry-jitter-ms retry_jitter_ms
+        retry-max-delay-ms (or retry_max_delay_ms default-retry-max-delay-ms)
+        next-delay-ms (fn [delay-ms]
+                        (long (min retry-max-delay-ms (*' 2 delay-ms))))
         retry-delay-ms (fn [delay-ms retry-after-ms]
-                         (+ (max delay-ms (or retry-after-ms 0))
-                            (if (pos? retry-jitter-ms)
-                              (random-int sys (inc retry-jitter-ms))
-                              0)))]
+                         (let [base-delay-ms (max delay-ms (or retry-after-ms 0))
+                               jitter-ms (if (pos? retry-jitter-ms)
+                                           (random-int sys (inc retry-jitter-ms))
+                                           0)]
+                           (long (min retry-max-delay-ms
+                                      (+' base-delay-ms jitter-ms)))))]
     (letfn [(attempt [attempt-number delay-ms]
               (try
                 (f)
@@ -76,7 +97,7 @@
                                :status (:status error-data)
                                :error-type (:type error-data))
                         (sleep! sys sleep-ms)
-                        (attempt (inc attempt-number) (* 2 delay-ms)))
+                        (attempt (inc attempt-number) (next-delay-ms delay-ms)))
                       (throw (ex-info (or (ex-message e) "Retryable operation failed")
                                       (assoc (merge error-context (or (ex-data e) {}))
                                              :retryable true

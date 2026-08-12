@@ -80,11 +80,37 @@
      {:method :get :url "https://example.test/sitemap.xml"})
     (is (= [2000] @sleeps))))
 
+(deftest source-http-retries-cap-untrusted-retry-after-values
+  (doseq [retry-after ["9999999999999999"
+                       "Thu, 01 Jan 2099 00:00:00 GMT"]]
+    (let [requests (atom [])
+          sleeps (atom [])
+          sys (sequential-http [{:status 503
+                                 :headers {"Retry-After" retry-after}}
+                                {:status 200}]
+                               requests
+                               sleeps)
+          response (source/request-with-retries!
+                    sys
+                    {:id "site"
+                     :max_retries 2
+                     :retry_initial_ms 10
+                     :retry_jitter_ms 0
+                     :retry_max_delay_ms 50}
+                    {:method :get :url "https://example.test/sitemap.xml"})]
+      (is (= 200 (:status response)))
+      (is (= [50] @sleeps))
+      (is (= 2 (count @requests))))))
+
 (deftest exhausted-source-http-responses-carry-safe-retry-context
   (let [requests (atom [])
         sleeps (atom [])
-        sys (sequential-http [{:status 503 :body "unavailable"}
-                              {:status 503 :body "still unavailable"}]
+        sys (sequential-http [{:status 503
+                               :headers {"Retry-After" "9999999999999999"}
+                               :body "unavailable"}
+                              {:status 503
+                               :headers {"Retry-After" "9999999999999999"}
+                               :body "still unavailable"}]
                              requests
                              sleeps)
         response (source/request-with-retries!
@@ -92,7 +118,8 @@
                   {:id "site"
                    :max_retries 2
                    :retry_initial_ms 10
-                   :retry_jitter_ms 0}
+                   :retry_jitter_ms 0
+                   :retry_max_delay_ms 50}
                   {:method :get
                    :url "https://user:secret@example.test/sitemap.xml?token=secret#fragment"})]
     (try
@@ -111,7 +138,7 @@
           (is (= "still unavailable" (:body data)))
           (is (nil? (:response data))))))
     (is (= 2 (count @requests)))
-    (is (= [10] @sleeps))))
+    (is (= [50] @sleeps))))
 
 (deftest source-http-request-retry-classification
   (testing "transport failures remain retryable after exhaustion"

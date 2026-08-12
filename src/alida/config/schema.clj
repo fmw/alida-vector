@@ -55,6 +55,7 @@
    [:max_retries {:optional true} :int]
    [:retry_initial_ms {:optional true} :int]
    [:retry_jitter_ms {:optional true} :int]
+   [:retry_max_delay_ms {:optional true} :int]
    [:inter_batch_delay_ms {:optional true} :int]
    [:api_key {:optional true} :string]])
 
@@ -90,7 +91,8 @@
 (def ^:private http-retry-entries
   [[:max_retries {:optional true} :int]
    [:retry_initial_ms {:optional true} :int]
-   [:retry_jitter_ms {:optional true} :int]])
+   [:retry_jitter_ms {:optional true} :int]
+   [:retry_max_delay_ms {:optional true} :int]])
 
 (def ^:private webdriver-entries
   [[:content_wait_selectors {:optional true} [:sequential :string]]
@@ -222,6 +224,7 @@
    [:max_retries {:optional true} :int]
    [:retry_initial_ms {:optional true} :int]
    [:retry_jitter_ms {:optional true} :int]
+   [:retry_max_delay_ms {:optional true} :int]
    [:inter_prompt_delay_ms {:optional true} :int]
    [:prompt_policy_version {:optional true} :string]
    [:deterministic_gate_version {:optional true} :string]

@@ -168,7 +168,7 @@
                       {:type :alida.config/invalid-verification-provider-config
                        :key :max_prompt_tokens
                        :value max-prompt-tokens})))
-    (doseq [k [:max_retries :retry_initial_ms]
+    (doseq [k [:max_retries :retry_initial_ms :retry_max_delay_ms]
             :let [v (get verification k)]
             :when (and (some? v) (not (pos-int? v)))]
       (throw (ex-info (str "Invalid verification config: " (name k) " must be positive")
@@ -236,7 +236,7 @@
 (defn- validate-positive-embedding-options!
   [index]
   (let [embedding (:embedding index)]
-    (doseq [k [:max_batch_size :max_retries :retry_initial_ms]
+    (doseq [k [:max_batch_size :max_retries :retry_initial_ms :retry_max_delay_ms]
             :let [v (get embedding k)]
             :when (and (some? v) (not (pos-int? v)))]
       (throw (ex-info (str "Invalid embedding config for index " (:name index)
@@ -446,7 +446,7 @@
 (defn- validate-source-retry-options!
   [index]
   (doseq [source (:sources index)
-          k [:max_retries :retry_initial_ms]
+          k [:max_retries :retry_initial_ms :retry_max_delay_ms]
           :let [value (get source k)]
           :when (and (some? value) (not (pos-int? value)))]
     (throw (ex-info (str "Invalid source config for index " (:name index)

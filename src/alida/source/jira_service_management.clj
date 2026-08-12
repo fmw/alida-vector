@@ -214,11 +214,14 @@
          vec)))
 
 (defn- resolve-shim-link
-  [sys url]
+  [sys source-cfg url]
   (try
-    (let [response (source/request! sys {:method :get
-                                         :url url
-                                         :redirect-policy :never})
+    (let [response (source/request-with-retries!
+                    sys
+                    source-cfg
+                    {:method :get
+                     :url url
+                     :redirect-policy :never})
           location (source/header response "Location")]
       (some->> location (alida.url/normalize url) alida.url/article-id))
     (catch Exception _
@@ -247,17 +250,17 @@
            code))))
 
 (defn- href-article-id
-  [sys ctx href]
+  [sys source-cfg ctx href]
   (or (url/article-id href)
       (some->> (confluence-short-link-shim ctx href)
-               (resolve-shim-link sys))))
+               (resolve-shim-link sys source-cfg))))
 
 (defn- article-links
-  [sys ctx base-url body]
+  [sys source-cfg ctx base-url body]
   (let [document (Jsoup/parse (or body "") base-url)]
     (->> (.select document "a[href]")
          (map #(.absUrl % "href"))
-         (keep #(href-article-id sys ctx %))
+         (keep #(href-article-id sys source-cfg ctx %))
          distinct
          vec)))
 
@@ -296,7 +299,7 @@
                         (:title ref))
              :body raw-body
              :hrefs (mapv #(article-url ctx %)
-                          (article-links sys ctx canonical-url raw-body))}
+                          (article-links sys source-cfg ctx canonical-url raw-body))}
             (source/anomaly
              :cognitect.anomalies/fault
              {:type :alida.source.jira-service-management/article-content-missing

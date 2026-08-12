@@ -180,10 +180,12 @@ Source HTTP, embedding, and verification calls are retried independently inside
 Alida before `crawl` returns. HTTP `429` and `5xx` responses, along with
 transport I/O failures, use exponential backoff. Alida honors a `Retry-After`
 response header when it asks for a longer delay. Configure each call site's
-maximum attempt count, initial delay, and jitter with `max_retries`,
-`retry_initial_ms`, and `retry_jitter_ms`. Source request settings live on a
-`website` or `jira-service-management` source; provider request settings live in
-the corresponding embedding or verification section.
+maximum attempt count, initial delay, jitter, and maximum delay with
+`max_retries`, `retry_initial_ms`, `retry_jitter_ms`, and
+`retry_max_delay_ms`. The maximum delay defaults to 60 seconds and also bounds
+untrusted `Retry-After` values. Source request settings live on a `website` or
+`jira-service-management` source; provider request settings live in the
+corresponding embedding or verification section.
 
 After those retries are exhausted, `crawl` returns one of these statuses:
 

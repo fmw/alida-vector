@@ -9,6 +9,7 @@
 (def default-request-max-retries 3)
 (def default-request-retry-initial-ms 1000)
 (def default-request-retry-jitter-ms 250)
+(def default-request-retry-max-delay-ms retry/default-retry-max-delay-ms)
 (def max-error-body-length 1024)
 
 (def ^:private retry-detail-keys
@@ -119,6 +120,8 @@
                            default-request-retry-initial-ms)
      :retry_jitter_ms (or (:retry_jitter_ms source-cfg)
                           default-request-retry-jitter-ms)
+     :retry_max_delay_ms (or (:retry_max_delay_ms source-cfg)
+                             default-request-retry-max-delay-ms)
      :operation :source-http-request
      :error-context (cond-> {:type :alida.source/transport-error
                              :source-id (:id source-cfg)

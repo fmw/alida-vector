@@ -119,13 +119,16 @@ The shared fetch stage defaults to `max_concurrency: 20`. Generic WebDriver disc
 `website` sources and the API path of `jira-service-management` sources retry
 transient HTTP requests before reporting a fetch or discovery failure. The
 retryable cases are HTTP `429`, HTTP `5xx`, and transport I/O failures.
-`Retry-After` is honored when it asks for a longer delay.
+`Retry-After` is honored when it asks for a longer delay, up to the configured
+maximum delay. This bound prevents an invalid or hostile response header from
+parking a crawl indefinitely.
 
 | Setting | Default | Purpose |
 | --- | --- | --- |
 | `max_retries` | `3` | Maximum attempts, including the first request. |
 | `retry_initial_ms` | `1000` | Delay before the second attempt; later delays use exponential backoff. |
 | `retry_jitter_ms` | `250` | Maximum random jitter added to each delay. Use `0` to disable jitter. |
+| `retry_max_delay_ms` | `60000` | Maximum sleep before any retry, including `Retry-After` and jitter. |
 
 For example:
 
@@ -137,6 +140,7 @@ sources:
     max_retries: 4
     retry_initial_ms: 1000
     retry_jitter_ms: 250
+    retry_max_delay_ms: 60000
 ```
 
 An individual page that still fails after these attempts remains a recoverable
