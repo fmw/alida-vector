@@ -311,15 +311,20 @@
                   :text text}})
         (slack-change-detail-text summary)))
 
-(defn- slack-llm-validation-block
+(defn- slack-llm-summary-block
   [{:keys [verification]}]
   (let [llm-verdict (:llm_verdict verification)
-        reasoning (str/trim (or (:reasoning verification) ""))]
-    (when (and (#{"caution" "fail"} llm-verdict)
-               (seq reasoning))
+        reasoning (str/trim (or (:reasoning verification) ""))
+        title (cond
+                (= "pass" llm-verdict)
+                "LLM change summary"
+
+                (#{"caution" "fail"} llm-verdict)
+                (str "LLM validation (" llm-verdict ")"))]
+    (when (and title (seq reasoning))
       {:type "section"
        :text {:type "mrkdwn"
-              :text (truncate (str "*LLM validation (" llm-verdict ")*\n"
+              :text (truncate (str "*" title "*\n"
                                    (slack-escape reasoning))
                               max-slack-section-text-length)}})))
 
@@ -351,7 +356,7 @@
               {:type "section"
                :fields (summary-fields summary document_count chunk_count error_count skipped_count embedding_stats)}
               (slack-change-detail-blocks summary)
-              (slack-llm-validation-block summary)
+              (slack-llm-summary-block summary)
               {:type "section"
                :fields [(field "Crawl time" (str (ms phase_stats :crawl_duration_ms) " ms"))
                         (field "Embedding time" (str (ms phase_stats :embedding_duration_ms) " ms"))]}
@@ -437,6 +442,8 @@
             (llm-verification-section summary verification)
             (when-let [details (get-in verification [:raw_response :batch_review_details])]
               (str "LLM Batch Review Details\n" details))
+            (when-let [details (get-in verification [:raw_response :batch_change_details])]
+              (str "LLM Batch Change Details\n" details))
             (section "LLM Security Findings"
                      (map finding-line (:llm_security_findings verification)))
             (str/join

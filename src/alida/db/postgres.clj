@@ -277,6 +277,36 @@
     (run-id value)]
    jdbc-opts))
 
+(def document-chunk-content-batch-size 500)
+
+(defn list-document-chunk-content
+  "Return ordered chunk text for selected documents in a run. Document keys are
+   [source-id canonical-url] pairs and are batched to stay below PostgreSQL's
+   parameter limit."
+  [connectable embedding-dimensions value document-keys]
+  (let [table-name (pgvector/dimension-table-name embedding-dimensions)
+        document-keys (vec (distinct document-keys))]
+    (vec
+     (mapcat
+      (fn [batch]
+        (let [selected-values (str/join ", " (repeat (count batch) "(?, ?)"))
+              sql (format
+                   "SELECT d.source_id, d.canonical_url, c.chunk_index, c.content
+                    FROM (VALUES %s) AS selected(source_id, canonical_url)
+                    JOIN alida_documents d
+                      ON d.source_id = selected.source_id
+                     AND d.canonical_url = selected.canonical_url
+                    JOIN %s c ON c.run_id = d.run_id AND c.document_id = d.id
+                    WHERE d.run_id = ?
+                    ORDER BY d.source_id, d.canonical_url, c.chunk_index"
+                   selected-values
+                   table-name)
+              params (mapcat identity batch)]
+          (jdbc/execute! connectable
+                         (into [sql] (concat params [(run-id value)]))
+                         jdbc-opts)))
+      (partition-all document-chunk-content-batch-size document-keys)))))
+
 (defn save-run-diff!
   [connectable value previous-run-id {:keys [summary added_urls removed_urls changed_urls moved_urls
                                              heuristic_security_findings]}]

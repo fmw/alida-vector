@@ -27,11 +27,12 @@ are also excluded from the hash.
 Attestations are enabled by default. After a provider call, Alida stores its
 structured result in `alida_verification_attestations`. A later crawl using the
 same hash and attestor reuses that result instead of repeating the verification
-calls. A locally cached older batched attestation with at least three distinct
-review reasons may make one presentation-only synthesis call to improve its
-report prose. Trusted-source reuse never makes this additional provider call.
-The stored attested verdict and findings remain authoritative if synthesis
-fails or disagrees with them, and the full report retains the deterministic
+calls. A locally cached older batched attestation may make one presentation-only
+synthesis call to combine multiple passing change summaries or at least three
+distinct review reasons. Trusted-source reuse never makes this additional
+provider call. The stored attested verdict and findings remain authoritative if
+synthesis fails or disagrees with them. The raw response retains each batch
+result, and the full report keeps both passing batch change details and non-pass
 batch review details.
 
 The synthesis prompt is versioned separately from the verification input hash.
@@ -42,9 +43,10 @@ and a locally cached result can be refreshed after the prompt changes.
 Synthesis receives model output that was derived from untrusted page content.
 The synthesis system prompt treats that material as data, and code enforces the
 stored verdict, tally, findings, and security findings. The remaining risk is
-presentation-only: synthesized prose could still describe a non-pass result too
-benignly. This risk is accepted because the gate data remains authoritative and
-the full report preserves the deterministic batch review details for audit.
+presentation-only: synthesized prose could still describe passing changes
+imprecisely or make a non-pass result sound too benign. This risk is accepted
+because the gate data remains authoritative and the underlying batch results
+remain available for audit.
 
 The examples use `gpt-5.6-terra`, the balanced cost/performance member of the
 [current GPT-5.6 family](https://developers.openai.com/api/docs/models). Use

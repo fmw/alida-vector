@@ -547,6 +547,78 @@
   [chunk]
   (select-keys chunk [:chunk_index :chunk_count :heading_path :content :content_hash :estimated_tokens]))
 
+(def max-verification-change-segments 100)
+(def max-verification-change-characters 20000)
+
+(defn- content-segments
+  [chunks]
+  (->> chunks
+       (map :content)
+       (remove nil?)
+       (str/join "\n")
+       (#(str/split % #"\n+"))
+       (map str/trim)
+       (remove str/blank?)
+       vec))
+
+(defn- ordered-multiset-difference
+  [values subtracted-values]
+  (:difference
+   (reduce (fn [{:keys [remaining] :as result} value]
+             (if (pos? (get remaining value 0))
+               (update-in result [:remaining value] dec)
+               (update result :difference conj value)))
+           {:remaining (frequencies subtracted-values)
+            :difference []}
+           values)))
+
+(defn- bounded-change-segments
+  [segments]
+  (loop [remaining (seq segments)
+         included []
+         character-count 0]
+    (cond
+      (nil? remaining)
+      {:segments included}
+
+      (<= max-verification-change-segments (count included))
+      {:segments included
+       :omitted_count (count remaining)}
+
+      :else
+      (let [segment (first remaining)
+            available (- max-verification-change-characters character-count)]
+        (cond
+          (<= (count segment) available)
+          (recur (next remaining)
+                 (conj included segment)
+                 (+ character-count (count segment)))
+
+          (< 3 available)
+          {:segments (conj included
+                           (str (subs segment 0 (- available 3)) "..."))
+           :omitted_count (count (next remaining))}
+
+          :else
+          {:segments included
+           :omitted_count (count remaining)})))))
+
+(defn- content-changes
+  [previous-chunks current-chunks]
+  (let [previous-segments (content-segments previous-chunks)
+        current-segments (content-segments current-chunks)
+        removed (bounded-change-segments
+                 (ordered-multiset-difference previous-segments current-segments))
+        added (bounded-change-segments
+               (ordered-multiset-difference current-segments previous-segments))]
+    (cond-> {:removed_segments (:segments removed)
+             :added_segments (:segments added)}
+      (pos? (:omitted_count removed 0))
+      (assoc :removed_segments_omitted (:omitted_count removed))
+
+      (pos? (:omitted_count added 0))
+      (assoc :added_segments_omitted (:omitted_count added)))))
+
 (defn- verification-document
   [{:keys [document chunks]}]
   (assoc (select-keys document [:source_id :canonical_url :title :locale :normalized_content_hash])
@@ -575,6 +647,52 @@
                         documents)))
          (filter #(contains? wanted (document-key (:document %))))
          (mapv verification-document))))
+
+(def previous-change-document-batch-size 50)
+
+(defn- previous-content-changes
+  [ds run-diff documents]
+  ;; A moved URL is hash-identical by the diff contract. A move combined with an
+  ;; edit is represented as one removal and one addition because there is no
+  ;; stable identity with which to pair the two documents.
+  (let [current-by-document (into {} (map (juxt document-key identity)) documents)
+        document-keys (->> (:changed_urls run-diff)
+                           (map document-key)
+                           (filter #(contains? current-by-document %))
+                           distinct
+                           vec)]
+    (if (and (:previous_run_id run-diff) (seq document-keys))
+      (if-let [previous-run (db/get-run ds (:previous_run_id run-diff))]
+        (reduce
+         (fn [changes batch]
+           (let [previous-by-document
+                 (group-by document-key
+                           (db/list-document-chunk-content
+                            ds
+                            (:embedding_dimensions previous-run)
+                            (:id previous-run)
+                            batch))]
+             (reduce (fn [result key]
+                       (if-let [previous-chunks (not-empty (get previous-by-document key))]
+                         (assoc result
+                                key
+                                (content-changes previous-chunks
+                                                 (:chunks (get current-by-document key))))
+                         result))
+                     changes
+                     batch)))
+         {}
+         (partition-all previous-change-document-batch-size document-keys))
+        {})
+      {})))
+
+(defn- attach-content-changes
+  [documents changes-by-document]
+  (mapv (fn [document]
+          (if-let [changes (get changes-by-document (document-key document))]
+            (assoc document :content_changes changes)
+            document))
+        documents))
 
 (defn- llm-verification-enabled?
   [verification-cfg]
@@ -686,11 +804,17 @@
   [sys ds run run-diff deterministic-verification source-results]
   (let [verification-cfg (:verification (:alida/config sys))
         llm-details (when (llm-verification-enabled? verification-cfg)
-                      (let [prompts (verify/build-prompts
+                      (let [documents (verification-documents source-results run-diff)
+                            changes-by-document (previous-content-changes ds
+                                                                          run-diff
+                                                                          documents)
+                            prompts (verify/build-prompts
                                      {:index_name (:index_name run)
                                       :deterministic_verification deterministic-verification
                                       :diff run-diff
-                                      :documents (verification-documents source-results run-diff)
+                                      :documents (attach-content-changes
+                                                  documents
+                                                  changes-by-document)
                                       :max_prompt_tokens (:max_prompt_tokens verification-cfg)})]
                         (u/log ::verification-start
                                :index-name (:index_name run)
