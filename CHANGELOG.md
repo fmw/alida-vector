@@ -8,6 +8,8 @@
   complete findings and raw provider responses for inspection.
 - Retry transient website and Jira Service Management HTTP failures with
   bounded exponential backoff, jitter, and `Retry-After` support.
+- Add configurable retry attempts, initial delay, jitter, and maximum delay for
+  source, embedding, and verification requests.
 - Classify exhausted transient discovery failures for scheduler retries and
   include sanitized request context in failure reports and run metadata.
 
