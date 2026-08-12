@@ -39,11 +39,11 @@ from another scheduler or manual run.
 
 ## Retry Policy
 
-Alida retries transient embedding and LLM verification requests internally. A
-provider `429` may occur in either phase and does not imply that fetching source
-documents was rate-limited. If every failed index is still classified as
-retryable after those attempts, `crawl` exits with status `75` (`EX_TEMPFAIL`).
-Permanent or unclassified failures exit with status `1`.
+Alida retries transient source HTTP, embedding, and LLM verification requests
+internally. HTTP `429`, `5xx`, and transport I/O failures use bounded
+exponential backoff. If every failed index is still classified as retryable
+after those attempts, `crawl` exits with status `75` (`EX_TEMPFAIL`). Permanent
+or unclassified failures exit with status `1`.
 
 The example CronJob combines `backoffLimit: 1` with a `podFailurePolicy`. This
 retries the complete crawl once for status `75` and fails the Job immediately

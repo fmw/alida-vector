@@ -872,13 +872,32 @@
                                 llm-result))
     verification))
 
+(defn- failure-metadata
+  [e]
+  (let [data (or (ex-data e) {})
+        failure (cond-> {}
+                  (:type data) (assoc :type (:type data))
+                  (:phase data) (assoc :phase (:phase data))
+                  (:source-id data) (assoc :source_id (:source-id data))
+                  (:request-method data) (assoc :request_method (:request-method data))
+                  (:request-url data) (assoc :request_url (:request-url data))
+                  (:status data) (assoc :status (:status data))
+                  (contains? data :retryable) (assoc :retryable (:retryable data))
+                  (:retry-exhausted data) (assoc :retry_exhausted true)
+                  (:attempts data) (assoc :attempts (:attempts data))
+                  (:max-retries data) (assoc :max_retries (:max-retries data)))]
+    (when (seq failure)
+      {:failure failure})))
+
 (defn- fail-run!
   [ds run e]
   (when run
-    (db/update-run-status! ds
-                           (:id run)
-                           "error"
-                           {:error_summary (or (ex-message e) (str e))}))
+    (let [metadata (failure-metadata e)]
+      (db/update-run-status! ds
+                             (:id run)
+                             "error"
+                             (cond-> {:error_summary (or (ex-message e) (str e))}
+                               metadata (assoc :metadata metadata)))))
   e)
 
 (defn- compute-and-save-diff!
@@ -1006,10 +1025,12 @@
                        :notification-sent (:sent notification))
                 (assoc summary :notification notification))))
           (catch Exception e
-            (let [failure-data (assoc (or (ex-data e) {})
-                                      :type :alida.crawl/index-failed
-                                      :run-id (:id run)
-                                      :index-name (:name index-cfg))
+            (let [error-data (or (ex-data e) {})
+                  failure-data (cond-> (assoc error-data
+                                               :type :alida.crawl/index-failed
+                                               :run-id (:id run)
+                                               :index-name (:name index-cfg))
+                                 (:type error-data) (assoc :cause-type (:type error-data)))
                   cause (fail-run! ds run e)
                   failure-text (report/failure-summary
                                 {:run_id (:id run)
@@ -1024,7 +1045,14 @@
                      :run-id (:id run)
                      :message (or (ex-message e) (str e))
                      :status (:status failure-data)
-                     :error-type (:type failure-data)
+                     :source-id (:source-id failure-data)
+                     :request-method (:request-method failure-data)
+                     :request-url (:request-url failure-data)
+                     :retryable (:retryable failure-data)
+                     :retry-exhausted (:retry-exhausted failure-data)
+                     :attempts (:attempts failure-data)
+                     :max-retries (:max-retries failure-data)
+                     :error-type (:cause-type failure-data)
                      :notification-sent (:sent notification))
               (throw (ex-info (or (ex-message e) "Crawl failed")
                               (assoc failure-data :notification notification)

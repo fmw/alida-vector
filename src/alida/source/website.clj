@@ -69,7 +69,10 @@
 
      :else
      (let [response (source/require-success!
-                     (source/request! sys {:method :get :url sitemap-url})
+                     (source/request-with-retries!
+                      sys
+                      source-cfg
+                      {:method :get :url sitemap-url})
                      {:source-id (:id source-cfg)
                       :sitemap-url sitemap-url})
            {:keys [kind locations]} (parse-sitemap (:body response))]
@@ -98,8 +101,11 @@
 
 (defmethod source/fetch :website
   [sys source-cfg discovered-item]
-  (let [response (source/request! sys {:method :get
-                                       :url (:canonical_url discovered-item)})]
+  (let [response (source/request-with-retries!
+                  sys
+                  source-cfg
+                  {:method :get
+                   :url (:canonical_url discovered-item)})]
     (if (source/successful-status? (:status response))
       (assoc discovered-item
              :body (:body response)

@@ -12,4 +12,5 @@
                          (swap! requests conj request)
                          (or (get responses (:url request))
                              {:status 500
-                              :body (str "missing fake response for " (:url request))}))})
+                              :body (str "missing fake response for " (:url request))}))
+   :alida/sleep (fn [_millis])})

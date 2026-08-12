@@ -75,20 +75,29 @@
   [data]
   (cond
     (= 429 (:status data))
-    "The provider rate-limited the request after retries. Wait for quota to recover or reduce request volume before rerunning."
+    "The upstream service rate-limited the request after retries. The scheduler may retry it automatically; reduce request volume if it persists."
 
     (:retryable data)
-    "The provider returned a retryable error after retries. Check provider health and rerun when stable."
+    "The upstream service or network remained unavailable after retries. The scheduler may retry it automatically; inspect source health if it persists."
 
     :else
     "Inspect the pod logs and run metadata, fix the source/config issue, then rerun."))
 
 (defn failure-summary
   [{:keys [run_id index_name message data]}]
-  (let [details (keep identity
+  (let [attempts (when-let [attempts (:attempts data)]
+                   (str "attempts=" attempts
+                        (when-let [maximum (:max-retries data)]
+                          (str "/" maximum))))
+        details (keep identity
                       [(failure-detail data :phase "phase")
+                       (failure-detail data :source-id "source")
+                       (failure-detail data :request-method "method")
+                       (failure-detail data :request-url "url")
                        (failure-detail data :status "status")
+                       attempts
                        (failure-detail data :retryable "retryable")
+                       (failure-detail data :cause-type "cause")
                        (failure-detail data :type "type")])]
     (str (label-prefix data)
          "Alida Vector crawl failed"

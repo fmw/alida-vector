@@ -38,8 +38,10 @@
                 url))
 
 (defn- request-success
-  [sys request context]
-  (source/require-success! (source/request! sys request) context))
+  [sys source-cfg request context]
+  (source/require-success!
+   (source/request-with-retries! sys source-cfg request)
+   context))
 
 (defn- read-json
   [body]
@@ -79,6 +81,7 @@
 (defn- portal-context
   [sys source-cfg start-url]
   (let [response (request-success sys
+                                  source-cfg
                                   {:method :get :url start-url}
                                   {:source-id (:id source-cfg)
                                    :url start-url})
@@ -161,6 +164,7 @@
   (let [url (category-api-url ctx category-id start limit)
         response (request-success
                   sys
+                  source-cfg
                   {:method :get
                    :url url
                    :headers {"Accept" "application/json, text/plain, */*"
@@ -210,11 +214,14 @@
          vec)))
 
 (defn- resolve-shim-link
-  [sys url]
+  [sys source-cfg url]
   (try
-    (let [response (source/request! sys {:method :get
-                                         :url url
-                                         :redirect-policy :never})
+    (let [response (source/request-with-retries!
+                    sys
+                    source-cfg
+                    {:method :get
+                     :url url
+                     :redirect-policy :never})
           location (source/header response "Location")]
       (some->> location (alida.url/normalize url) alida.url/article-id))
     (catch Exception _
@@ -243,17 +250,17 @@
            code))))
 
 (defn- href-article-id
-  [sys ctx href]
+  [sys source-cfg ctx href]
   (or (url/article-id href)
       (some->> (confluence-short-link-shim ctx href)
-               (resolve-shim-link sys))))
+               (resolve-shim-link sys source-cfg))))
 
 (defn- article-links
-  [sys ctx base-url body]
+  [sys source-cfg ctx base-url body]
   (let [document (Jsoup/parse (or body "") base-url)]
     (->> (.select document "a[href]")
          (map #(.absUrl % "href"))
-         (keep #(href-article-id sys ctx %))
+         (keep #(href-article-id sys source-cfg ctx %))
          distinct
          vec)))
 
@@ -273,9 +280,12 @@
   (let [id (:article_id ref)
         url (article-api-url ctx id)
         canonical-url (or (:canonical_url ref) (article-url ctx id))
-        response (source/request! sys {:method :get
-                                       :url url
-                                       :headers {"Accept" "application/json"}})]
+        response (source/request-with-retries!
+                  sys
+                  source-cfg
+                  {:method :get
+                   :url url
+                   :headers {"Accept" "application/json"}})]
     (if (source/successful-status? (:status response))
       (if-let [payload (article-payload response)]
         (let [raw-body (article-body payload)]
@@ -289,7 +299,7 @@
                         (:title ref))
              :body raw-body
              :hrefs (mapv #(article-url ctx %)
-                          (article-links sys ctx canonical-url raw-body))}
+                          (article-links sys source-cfg ctx canonical-url raw-body))}
             (source/anomaly
              :cognitect.anomalies/fault
              {:type :alida.source.jira-service-management/article-content-missing
@@ -316,6 +326,30 @@
                                :canonical-url canonical-url
                                :article-id id})))))
 
+(defn- fetch-article-safely
+  [sys source-cfg ctx ref]
+  (try
+    (fetch-article sys source-cfg ctx ref)
+    (catch clojure.lang.ExceptionInfo e
+      (let [data (ex-data e)]
+        (if (and (:retryable data) (:retry-exhausted data))
+          (source/anomaly
+           :cognitect.anomalies/fault
+           (merge {:type :alida.source.jira-service-management/article-fetch-failed
+                   :source-id (:id source-cfg)
+                   :canonical-url (or (:canonical_url ref)
+                                      (article-url ctx (:article_id ref)))
+                   :article-id (:article_id ref)
+                   :cause-type (:type data)}
+                  (select-keys data
+                               [:retryable
+                                :retry-exhausted
+                                :attempts
+                                :max-retries
+                                :request-method
+                                :request-url])))
+          (throw e))))))
+
 (defn- enqueue-refs
   [source-cfg ctx queued refs page]
   (reduce (fn [[queue queued] href]
@@ -333,8 +367,8 @@
 (defn- fetch-batch
   [pool sys source-cfg ctx refs]
   (if pool
-    (vec (cp/upmap pool #(fetch-article sys source-cfg ctx %) refs))
-    (mapv #(fetch-article sys source-cfg ctx %) refs)))
+    (vec (cp/upmap pool #(fetch-article-safely sys source-cfg ctx %) refs))
+    (mapv #(fetch-article-safely sys source-cfg ctx %) refs)))
 
 (defn- article-not-found?
   [item]

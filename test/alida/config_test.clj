@@ -52,6 +52,56 @@
        (load-from-map (assoc-in valid-config [:indexes 0 :sources 0]
                                 {:id "support" :type "jira-service-management"})))))
 
+(deftest source-http-retry-options-load-and-validate
+  (testing "website and Jira API sources accept retry settings"
+    (doseq [source [{:id "site"
+                     :type "website"
+                     :sitemap_url "https://example.test/sitemap.xml"
+                     :max_retries 4
+                     :retry_initial_ms 500
+                     :retry_jitter_ms 0
+                     :retry_max_delay_ms 60000}
+                    {:id "support"
+                     :type "jira-service-management"
+                     :url "https://example.test/servicedesk/customer/portal/1"
+                     :max_retries 4
+                     :retry_initial_ms 500
+                     :retry_jitter_ms 0
+                     :retry_max_delay_ms 60000}]]
+      (let [loaded (load-from-map (assoc-in valid-config
+                                             [:indexes 0 :sources 0]
+                                             source))
+            loaded-source (-> loaded :indexes first :sources first)]
+        (is (= 4 (:max_retries loaded-source)))
+        (is (= 0 (:retry_jitter_ms loaded-source)))
+        (is (= 60000 (:retry_max_delay_ms loaded-source))))))
+  (testing "attempt counts and initial delays must be positive"
+    (doseq [key [:max_retries :retry_initial_ms :retry_max_delay_ms]]
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"must be positive"
+           (load-from-map (assoc-in valid-config
+                                    [:indexes 0 :sources 0 key]
+                                    0))))))
+  (testing "jitter may be zero but not negative"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"retry_jitter_ms must be zero or positive"
+         (load-from-map (assoc-in valid-config
+                                  [:indexes 0 :sources 0 :retry_jitter_ms]
+                                  -1)))))
+  (testing "retry settings are rejected for sources without HTTP retries"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"Invalid Alida config"
+         (load-from-map
+          (assoc-in valid-config
+                    [:indexes 0 :sources 0]
+                    {:id "files"
+                     :type "local"
+                     :path "/tmp/docs"
+                     :max_retries 2}))))))
+
 (deftest rejects-s3-source-without-bucket
   (is (thrown-with-msg?
        clojure.lang.ExceptionInfo #"requires bucket"
@@ -511,7 +561,14 @@ indexes:
                             #"max_batch_size must be positive"
                             (config/load-config (.getPath file))))
       (finally
-        (.delete file)))))
+        (.delete file))))
+  (is (thrown-with-msg?
+       clojure.lang.ExceptionInfo
+       #"retry_max_delay_ms must be positive"
+       (load-from-map
+        (assoc-in valid-config
+                  [:indexes 0 :embedding :retry_max_delay_ms]
+                  0)))))
 
 (deftest embedding-provider-rate-limit-options-must-be-non-negative
   (let [file (java.io.File/createTempFile "alida-embedding-rate-limit-options" ".yml")]
@@ -714,8 +771,10 @@ indexes:
                        :max_retries 2
                        :retry_initial_ms 1000
                        :retry_jitter_ms 250
+                       :retry_max_delay_ms 60000
                        :inter_prompt_delay_ms 500))]
       (is (= 2 (get-in cfg [:verification :max_retries])))
+      (is (= 60000 (get-in cfg [:verification :retry_max_delay_ms])))
       (is (= 500 (get-in cfg [:verification :inter_prompt_delay_ms])))))
   (testing "invalid retry options fail"
     (is (thrown-with-msg?
@@ -723,6 +782,11 @@ indexes:
          #"max_retries must be positive"
          (load-from-map
           (assoc-in valid-config [:verification :max_retries] 0))))
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"retry_max_delay_ms must be positive"
+         (load-from-map
+          (assoc-in valid-config [:verification :retry_max_delay_ms] 0))))
     (is (thrown-with-msg?
          clojure.lang.ExceptionInfo
          #"inter_prompt_delay_ms must be zero or positive"

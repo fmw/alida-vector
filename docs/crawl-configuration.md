@@ -114,6 +114,40 @@ The shared fetch stage defaults to `max_concurrency: 20`. Generic WebDriver disc
 
 `inter_request_delay_ms` applies to the shared fetch stage. It does not throttle sitemap discovery, Jira API discovery, or browser navigation. Use connector concurrency settings to control those operations.
 
+### HTTP request retries
+
+`website` sources and the API path of `jira-service-management` sources retry
+transient HTTP requests before reporting a fetch or discovery failure. The
+retryable cases are HTTP `429`, HTTP `5xx`, and transport I/O failures.
+`Retry-After` is honored when it asks for a longer delay, up to the configured
+maximum delay. This bound prevents an invalid or hostile response header from
+parking a crawl indefinitely.
+
+| Setting | Default | Purpose |
+| --- | --- | --- |
+| `max_retries` | `3` | Maximum attempts, including the first request. |
+| `retry_initial_ms` | `1000` | Delay before the second attempt; later delays use exponential backoff. |
+| `retry_jitter_ms` | `250` | Maximum random jitter added to each delay. Use `0` to disable jitter. |
+| `retry_max_delay_ms` | `60000` | Maximum sleep before any retry, including `Retry-After` and jitter. |
+
+For example:
+
+```yaml
+sources:
+  - id: documentation
+    type: website
+    sitemap_url: https://docs.example.com/sitemap.xml
+    max_retries: 4
+    retry_initial_ms: 1000
+    retry_jitter_ms: 250
+    retry_max_delay_ms: 60000
+```
+
+An individual page that still fails after these attempts remains a recoverable
+crawl error. A fatal discovery request, such as a sitemap or Jira API listing,
+ends the candidate run. Exhausted transient discovery failures are classified
+as retryable so a status-aware scheduler can retry the complete crawl.
+
 ## URL Scope and Filtering
 
 Web sources support three filters:

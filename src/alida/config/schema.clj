@@ -55,6 +55,7 @@
    [:max_retries {:optional true} :int]
    [:retry_initial_ms {:optional true} :int]
    [:retry_jitter_ms {:optional true} :int]
+   [:retry_max_delay_ms {:optional true} :int]
    [:inter_batch_delay_ms {:optional true} :int]
    [:api_key {:optional true} :string]])
 
@@ -87,6 +88,12 @@
    [:start_url {:optional true} :string]
    [:start_urls {:optional true} [:sequential :string]]])
 
+(def ^:private http-retry-entries
+  [[:max_retries {:optional true} :int]
+   [:retry_initial_ms {:optional true} :int]
+   [:retry_jitter_ms {:optional true} :int]
+   [:retry_max_delay_ms {:optional true} :int]])
+
 (def ^:private webdriver-entries
   [[:content_wait_selectors {:optional true} [:sequential :string]]
    [:browser_args {:optional true} [:sequential :string]]
@@ -115,6 +122,7 @@
   (source-schema ["website"]
                  common-source-entries
                  url-crawl-entries
+                 http-retry-entries
                  [[:sitemap_url {:optional true} :string]
                   [:sitemap_urls {:optional true} [:sequential :string]]
                   [:max_sitemap_depth {:optional true} :int]]))
@@ -125,6 +133,7 @@
                  url-crawl-entries
                  start-url-entries
                  webdriver-entries
+                 http-retry-entries
                  [[:crawl_method {:optional true} [:enum "api" "webdriver" "auto"]]
                   [:api_max_concurrency {:optional true} :int]
                   [:api_category_page_limit {:optional true} :int]]))
@@ -215,6 +224,7 @@
    [:max_retries {:optional true} :int]
    [:retry_initial_ms {:optional true} :int]
    [:retry_jitter_ms {:optional true} :int]
+   [:retry_max_delay_ms {:optional true} :int]
    [:inter_prompt_delay_ms {:optional true} :int]
    [:prompt_policy_version {:optional true} :string]
    [:deterministic_gate_version {:optional true} :string]
