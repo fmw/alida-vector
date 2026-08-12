@@ -16,7 +16,7 @@ services:
       - postgres-data:/var/lib/postgresql/data
 
   alida:
-    image: ghcr.io/fmw/alida-vector:0.1.0
+    image: ghcr.io/fmw/alida-vector:0.1
     depends_on:
       postgres:
         condition: service_healthy

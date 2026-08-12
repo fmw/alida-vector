@@ -1,5 +1,18 @@
 # Changelog
 
+## 0.1.5 - 2026-08-12
+
+- Summarize substantive corpus changes for passing crawls in Slack, using
+  bounded previous-versus-current content evidence and deterministic fallbacks.
+- Keep change summaries concise across batched verification while retaining
+  complete findings and raw provider responses for inspection.
+- Retry transient website and Jira Service Management HTTP failures with
+  bounded exponential backoff, jitter, and `Retry-After` support.
+- Add configurable retry attempts, initial delay, jitter, and maximum delay for
+  source, embedding, and verification requests.
+- Classify exhausted transient discovery failures for scheduler retries and
+  include sanitized request context in failure reports and run metadata.
+
 ## 0.1.4 - 2026-08-10
 
 - Reuse semantically identical LLM verification attestations across runs and
