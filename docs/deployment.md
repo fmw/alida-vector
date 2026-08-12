@@ -163,10 +163,11 @@ Use `concurrencyPolicy: Forbid` so the scheduler does not start overlapping craw
 
 ### Retry layers and exit status
 
-Alida can call external model providers in two separate phases:
+Alida makes retryable external HTTP calls in three phases:
 
-| Phase | Provider call | State when the call fails |
+| Phase | External call | State when the call fails |
 | --- | --- | --- |
+| Crawling | Fetch website sitemaps/pages or Jira knowledge-base data. | The candidate has not yet been persisted. Individual page failures can be recorded as crawl errors; fatal discovery failures stop the run. |
 | Embedding | Create vectors for chunks that could not be reused. | The candidate has not yet been persisted. |
 | Verification | Ask an LLM to review the completed candidate and its diff. | Documents and vectors are persisted, but the candidate is not activated. |
 
@@ -175,13 +176,14 @@ it does not necessarily come from fetching source documents. In particular, a
 verification `429` occurs near the end of a run, after crawling and persistence
 but before the live index can change.
 
-Embedding and verification calls are retried independently inside Alida before
-`crawl` returns. HTTP `429` and `5xx` responses, along with transport I/O
-failures, use exponential backoff. Alida honors a provider's `Retry-After`
-response header when it asks for a longer delay. Configure each provider's
+Source HTTP, embedding, and verification calls are retried independently inside
+Alida before `crawl` returns. HTTP `429` and `5xx` responses, along with
+transport I/O failures, use exponential backoff. Alida honors a `Retry-After`
+response header when it asks for a longer delay. Configure each call site's
 maximum attempt count, initial delay, and jitter with `max_retries`,
-`retry_initial_ms`, and `retry_jitter_ms` in the corresponding embedding or
-verification section.
+`retry_initial_ms`, and `retry_jitter_ms`. Source request settings live on a
+`website` or `jira-service-management` source; provider request settings live in
+the corresponding embedding or verification section.
 
 After those retries are exhausted, `crawl` returns one of these statuses:
 
@@ -192,7 +194,7 @@ After those retries are exhausted, `crawl` returns one of these statuses:
 | `1` | At least one failure was permanent or could not be classified as retryable. |
 
 Status `75` follows the conventional `EX_TEMPFAIL` value. It lets a scheduler
-retry temporary provider or network failures without retrying invalid
+retry temporary source, provider, or network failures without retrying invalid
 configuration or other permanent processing failures. When multiple indexes run
 together, any permanent or unclassified failure takes precedence and produces
 status `1`.
@@ -237,7 +239,7 @@ The Pod template must use `restartPolicy: Never` with `podFailurePolicy`.
 Retries are replacement Pods in the same Job, so configure the Job and CronJob
 as a unit:
 
-- Keep `backoffLimit` small. Provider calls already exhausted their in-process
+- Keep `backoffLimit` small. External calls already exhausted their in-process
   retries before status `75` was returned.
 - Set `activeDeadlineSeconds` high enough to cover every Pod attempt and the Job
   controller's backoff, but low enough to terminate a genuinely stuck Job.

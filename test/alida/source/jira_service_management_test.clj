@@ -126,6 +126,85 @@
     (is (some #(str/includes? (:body %) "Body three") items))
     (is (= 5 (count @requests)))))
 
+(deftest jira-api-discovery-recovers-from-a-transient-listing-failure
+  (let [requests (atom [])
+        category-attempts (atom 0)
+        sys {:alida/http-request
+             (fn [request]
+               (swap! requests conj request)
+               (cond
+                 (= (:url request) (:url source-cfg))
+                 {:status 200 :body (portal-page)}
+
+                 (= (:url request) (category-url))
+                 (if (= 1 (swap! category-attempts inc))
+                   {:status 503 :body "unavailable"}
+                   {:status 200
+                    :body (json/write-str
+                           {:results [{:id "1001"
+                                       :title "Article One"
+                                       :viewUrl "/rest/servicedesk/knowledgebase/latest/articles/view/1001"}]})})
+
+                 (= (:url request) (page-api-url "1001"))
+                 {:status 200
+                  :headers {"Content-Type" "application/json"}
+                  :body (page-response
+                         "1001"
+                         "Article One"
+                         "<article><p>Body.</p></article>")}
+
+                 :else
+                 {:status 500 :body "unexpected request"}))
+             :alida/sleep (fn [_millis])
+             :alida/random-int (constantly 0)}
+        items (source/discover sys (assoc source-cfg
+                                          :max_retries 2
+                                          :retry_initial_ms 1
+                                          :retry_jitter_ms 0))]
+    (is (= ["1001"] (mapv :external_id items)))
+    (is (= 2 @category-attempts))
+    (is (= 4 (count @requests)))))
+
+(deftest jira-api-records-exhausted-article-transport-failures
+  (let [article-url (page-api-url "1001")
+        article-attempts (atom 0)
+        sys {:alida/http-request
+             (fn [request]
+               (cond
+                 (= (:url request) (:url source-cfg))
+                 {:status 200 :body (portal-page)}
+
+                 (= (:url request) (category-url))
+                 {:status 200
+                  :body (json/write-str
+                         {:results [{:id "1001"
+                                     :title "Article One"
+                                     :viewUrl "/rest/servicedesk/knowledgebase/latest/articles/view/1001"}]})}
+
+                 (= (:url request) article-url)
+                 (do
+                   (swap! article-attempts inc)
+                   (throw (java.io.IOException. "connection reset")))
+
+                 :else
+                 {:status 500 :body "unexpected request"}))
+             :alida/sleep (fn [_millis])
+             :alida/random-int (constantly 0)}
+        item (first (source/discover sys (assoc source-cfg
+                                                :api_max_concurrency 1
+                                                :max_retries 2
+                                                :retry_initial_ms 1
+                                                :retry_jitter_ms 0)))
+        error (:alida/error item)]
+    (is (source/anomaly? item))
+    (is (= :alida.source.jira-service-management/article-fetch-failed
+           (:type error)))
+    (is (= :alida.source/transport-error (:cause-type error)))
+    (is (true? (:retryable error)))
+    (is (true? (:retry-exhausted error)))
+    (is (= 2 (:attempts error)))
+    (is (= 2 @article-attempts))))
+
 (defn- rest-view-category-response
   "Mirror the live gateway, which returns a /rest/... viewUrl rather than a
    portal page URL."

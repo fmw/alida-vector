@@ -49,7 +49,7 @@
           (catch Exception _ nil)))))
 
 (defn with-retries
-  [sys {:keys [max_retries retry_initial_ms retry_jitter_ms operation]} f]
+  [sys {:keys [max_retries retry_initial_ms retry_jitter_ms operation error-context]} f]
   (let [max-retries max_retries
         retry-initial-ms retry_initial_ms
         retry-jitter-ms retry_jitter_ms
@@ -69,6 +69,7 @@
                                                      (:retry-after-ms error-data))]
                         (u/log ::retry-sleep
                                :operation operation
+                               :error-context error-context
                                :attempt attempt-number
                                :max-retries max-retries
                                :delay-ms sleep-ms
@@ -77,7 +78,7 @@
                         (sleep! sys sleep-ms)
                         (attempt (inc attempt-number) (* 2 delay-ms)))
                       (throw (ex-info (or (ex-message e) "Retryable operation failed")
-                                      (assoc (or (ex-data e) {})
+                                      (assoc (merge error-context (or (ex-data e) {}))
                                              :retryable true
                                              :retry-exhausted true
                                              :attempts attempt-number

@@ -74,14 +74,40 @@
            (mapv :canonical_url items)))))
 
 (deftest sitemap-http-failure-is-a-fatal-source-error
-  (let [sys (fake-http {"https://example.test/sitemap.xml" {:status 503 :body "unavailable"}}
-                       (atom []))]
-    (is (thrown-with-msg?
-         clojure.lang.ExceptionInfo
-         #"HTTP 503"
-         (source/discover sys {:id "site"
-                               :type "website"
-                               :sitemap_url "https://example.test/sitemap.xml"})))))
+  (let [requests (atom [])
+        sys (fake-http {"https://example.test/sitemap.xml" {:status 503 :body "unavailable"}}
+                       requests)]
+    (try
+      (source/discover sys {:id "site"
+                            :type "website"
+                            :sitemap_url "https://example.test/sitemap.xml"})
+      (is false "Expected sitemap discovery to fail")
+      (catch clojure.lang.ExceptionInfo e
+        (is (= 503 (:status (ex-data e))))
+        (is (true? (:retryable (ex-data e))))
+        (is (true? (:retry-exhausted (ex-data e))))
+        (is (= source/default-request-max-retries (:attempts (ex-data e))))))
+    (is (= source/default-request-max-retries (count @requests)))))
+
+(deftest website-discovery-recovers-from-a-transient-sitemap-failure
+  (let [requests (atom [])
+        attempts (atom 0)
+        sys {:alida/http-request
+             (fn [request]
+               (swap! requests conj request)
+               (if (= 1 (swap! attempts inc))
+                 {:status 503 :body "unavailable"}
+                 {:status 200 :body sitemap}))
+             :alida/sleep (fn [_millis])
+             :alida/random-int (constantly 0)}
+        items (source/discover sys {:id "site"
+                                    :type "website"
+                                    :sitemap_url "https://example.test/sitemap.xml"
+                                    :max_retries 2
+                                    :retry_initial_ms 1
+                                    :retry_jitter_ms 0})]
+    (is (= 3 (count items)))
+    (is (= 2 (count @requests)))))
 
 (deftest sitemap-http-failure-truncates-large-response-bodies
   (let [large-body (apply str (repeat (+ source/max-error-body-length 100) "x"))

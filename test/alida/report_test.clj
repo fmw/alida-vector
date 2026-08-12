@@ -98,6 +98,29 @@
                :data {:notification_label "prod"}})]
     (is (str/starts-with? text "[prod] Alida Vector crawl failed"))))
 
+(deftest failure-summary-explains-exhausted-source-retries
+  (let [text (report/failure-summary
+              {:index_name "docs"
+               :message "Source request failed with HTTP 503"
+               :data {:source-id "site"
+                      :request-method :get
+                      :request-url "https://example.test/sitemap.xml"
+                      :status 503
+                      :attempts 3
+                      :max-retries 3
+                      :retryable true
+                      :cause-type :alida.source/http-error
+                      :type :alida.crawl/index-failed
+                      :headers {"Authorization" "secret"}
+                      :body "sensitive response"}})]
+    (is (str/includes? text "source=site"))
+    (is (str/includes? text "method=:get"))
+    (is (str/includes? text "url=https://example.test/sitemap.xml"))
+    (is (str/includes? text "attempts=3/3"))
+    (is (str/includes? text "scheduler may retry it automatically"))
+    (is (not (str/includes? text "Authorization")))
+    (is (not (str/includes? text "sensitive response")))))
+
 (deftest builds-slack-blocks
   (let [blocks (:slack_blocks (report/build (assoc summary
                                                    :verification_verdict "caution"

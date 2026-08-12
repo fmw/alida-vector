@@ -52,6 +52,53 @@
        (load-from-map (assoc-in valid-config [:indexes 0 :sources 0]
                                 {:id "support" :type "jira-service-management"})))))
 
+(deftest source-http-retry-options-load-and-validate
+  (testing "website and Jira API sources accept retry settings"
+    (doseq [source [{:id "site"
+                     :type "website"
+                     :sitemap_url "https://example.test/sitemap.xml"
+                     :max_retries 4
+                     :retry_initial_ms 500
+                     :retry_jitter_ms 0}
+                    {:id "support"
+                     :type "jira-service-management"
+                     :url "https://example.test/servicedesk/customer/portal/1"
+                     :max_retries 4
+                     :retry_initial_ms 500
+                     :retry_jitter_ms 0}]]
+      (let [loaded (load-from-map (assoc-in valid-config
+                                             [:indexes 0 :sources 0]
+                                             source))
+            loaded-source (-> loaded :indexes first :sources first)]
+        (is (= 4 (:max_retries loaded-source)))
+        (is (= 0 (:retry_jitter_ms loaded-source))))))
+  (testing "attempt counts and initial delays must be positive"
+    (doseq [key [:max_retries :retry_initial_ms]]
+      (is (thrown-with-msg?
+           clojure.lang.ExceptionInfo
+           #"must be positive"
+           (load-from-map (assoc-in valid-config
+                                    [:indexes 0 :sources 0 key]
+                                    0))))))
+  (testing "jitter may be zero but not negative"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"retry_jitter_ms must be zero or positive"
+         (load-from-map (assoc-in valid-config
+                                  [:indexes 0 :sources 0 :retry_jitter_ms]
+                                  -1)))))
+  (testing "retry settings are rejected for sources without HTTP retries"
+    (is (thrown-with-msg?
+         clojure.lang.ExceptionInfo
+         #"Invalid Alida config"
+         (load-from-map
+          (assoc-in valid-config
+                    [:indexes 0 :sources 0]
+                    {:id "files"
+                     :type "local"
+                     :path "/tmp/docs"
+                     :max_retries 2}))))))
+
 (deftest rejects-s3-source-without-bucket
   (is (thrown-with-msg?
        clojure.lang.ExceptionInfo #"requires bucket"

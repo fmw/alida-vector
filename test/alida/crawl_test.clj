@@ -840,3 +840,44 @@
             [:chunks :ds 1536 previous-run-id
              [["website" "https://example.com/changed/b"]]]]
            @calls))))
+
+(deftest failed-runs-store-bounded-structured-request-context
+  (let [run-id #uuid "018c9099-041d-7f5b-9b65-5b8f08f8e61d"
+        updates (atom [])
+        error (ex-info "Source request failed with HTTP 503"
+                       {:type :alida.source/http-error
+                        :phase :discovery
+                        :source-id "site"
+                        :request-method :get
+                        :request-url "https://example.test/sitemap.xml"
+                        :status 503
+                        :retryable true
+                        :retry-exhausted true
+                        :attempts 3
+                        :max-retries 3
+                        :body "sensitive response"
+                        :headers {"Authorization" "secret"}
+                        :response {:body "also sensitive"}})]
+    (with-redefs [db/update-run-status!
+                  (fn [& args]
+                    (swap! updates conj args)
+                    {:id run-id})]
+      (is (identical? error (#'crawl/fail-run! :ds {:id run-id} error))))
+    (is (= [[:ds
+             run-id
+             "error"
+             {:error_summary "Source request failed with HTTP 503"
+              :metadata
+              {:failure {:type :alida.source/http-error
+                         :phase :discovery
+                         :source_id "site"
+                         :request_method :get
+                         :request_url "https://example.test/sitemap.xml"
+                         :status 503
+                         :retryable true
+                         :retry_exhausted true
+                         :attempts 3
+                         :max_retries 3}}}]]
+           @updates))
+    (is (not (str/includes? (pr-str @updates) "sensitive")))
+    (is (not (str/includes? (pr-str @updates) "Authorization")))))

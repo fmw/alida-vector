@@ -443,6 +443,33 @@
                      :value delay-ms})))
   index)
 
+(defn- validate-source-retry-options!
+  [index]
+  (doseq [source (:sources index)
+          k [:max_retries :retry_initial_ms]
+          :let [value (get source k)]
+          :when (and (some? value) (not (pos-int? value)))]
+    (throw (ex-info (str "Invalid source config for index " (:name index)
+                         ": source " (:id source)
+                         " " (name k) " must be positive")
+                    {:type :alida.config/invalid-source-retry-config
+                     :index (:name index)
+                     :source (:id source)
+                     :key k
+                     :value value})))
+  (doseq [source (:sources index)
+          :let [value (:retry_jitter_ms source)]
+          :when (and (some? value) (not (nat-int? value)))]
+    (throw (ex-info (str "Invalid source config for index " (:name index)
+                         ": source " (:id source)
+                         " retry_jitter_ms must be zero or positive")
+                    {:type :alida.config/invalid-source-retry-config
+                     :index (:name index)
+                     :source (:id source)
+                     :key :retry_jitter_ms
+                     :value value})))
+  index)
+
 (defn- validate-source-sitemap-depth!
   [index]
   (doseq [source (:sources index)
@@ -507,6 +534,7 @@
     (validate-source-concurrency! index)
     (validate-source-api-page-limit! index)
     (validate-source-delay! index)
+    (validate-source-retry-options! index)
     (validate-source-sitemap-depth! index)
     (validate-source-browser-restart! index)
     (validate-chunking! index))
