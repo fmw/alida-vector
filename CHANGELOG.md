@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.1.6 - 2026-09-14
+
+- Refresh the Clojure builder and Debian runtime image digests and upgrade
+  runtime OS packages during builds to incorporate available security fixes for
+  Chromium and Debian system libraries and utilities.
+
 ## 0.1.5 - 2026-08-12
 
 - Summarize substantive corpus changes for passing crawls in Slack, using
